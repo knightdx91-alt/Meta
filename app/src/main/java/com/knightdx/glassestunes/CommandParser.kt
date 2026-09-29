@@ -21,6 +21,9 @@ sealed class Command {
     object VolumeUp : Command()
     object VolumeDown : Command()
     object WhatsPlaying : Command()
+    /** Open the phone's assistant (Gemini, if it's set as default). */
+    object Assistant : Command()
+    data class OpenApp(val name: String) : Command()
     data class Unknown(val heard: String) : Command()
 }
 
@@ -49,6 +52,13 @@ object CommandParser {
         "play anything", "play all my music", "play my library", "shuffle music", "shuffle songs", "shuffle all songs",
     )
 
+    // "hey"/"ok" are stripped by normalize(), so "hey google" arrives as "google".
+    private val assistantWords = setOf(
+        "gemini", "gemini live", "talk to gemini", "open gemini", "open gemini live", "start gemini live", "go live",
+        "ask gemini", "google", "talk to google", "ask google", "assistant", "google assistant", "open assistant",
+        "open google assistant", "open the assistant",
+    )
+
     fun parse(raw: String): Command {
         val text = normalize(raw)
         if (text.isEmpty()) return Command.Unknown(raw)
@@ -62,6 +72,7 @@ object CommandParser {
             in volDownWords -> return Command.VolumeDown
             in whatWords -> return Command.WhatsPlaying
             in shuffleAllWords -> return Command.ShuffleAll
+            in assistantWords -> return Command.Assistant
         }
 
         val shuffleMatch = Regex("^(shuffle|play shuffled|shuffle play)\\s+(.+)$").find(text)
@@ -79,6 +90,9 @@ object CommandParser {
                 Command.Play(parseTarget(stripSome(target)))
             }
         }
+
+        val openMatch = Regex("^(open|launch|start|run|go to|switch to|pull up|bring up)\\s+(the\\s+)?(.+?)(\\s+app)?$").find(text)
+        if (openMatch != null) return Command.OpenApp(openMatch.groupValues[3])
 
         return Command.Unknown(raw)
     }

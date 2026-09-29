@@ -60,6 +60,7 @@ class MainActivity : Activity() {
 
     private fun missingPermissions(): List<String> {
         val wanted = mutableListOf(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= 31) wanted += Manifest.permission.BLUETOOTH_CONNECT
         if (Build.VERSION.SDK_INT >= 33) {
             wanted += Manifest.permission.POST_NOTIFICATIONS
             wanted += Manifest.permission.READ_MEDIA_AUDIO
@@ -102,6 +103,10 @@ class MainActivity : Activity() {
             ),
             line(missingPermissions().isEmpty(), "Microphone, music & notification permissions"),
             line(hasMediaAccess(), "Media control access (lets taps & voice control Samsung Music)"),
+            line(
+                Settings.canDrawOverlays(this),
+                "Display over other apps (auto-start when glasses connect, open apps hands-free)",
+            ),
             line(samsung.isInstalled(), if (samsung.isInstalled()) "Samsung Music installed" else "Samsung Music not found — built-in player will be used"),
             line(service != null, if (service != null) "Connector running · ${service.librarySize} songs on phone" else "Connector stopped"),
         ).joinToString("\n")
@@ -140,6 +145,11 @@ class MainActivity : Activity() {
         column.addView(button("2 · Allow media control access") {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
         })
+        column.addView(button("3 · Allow display over other apps") {
+            startActivity(
+                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:$packageName"))
+            )
+        })
         column.addView(button("🎤 Talk now") {
             val s = GlassesService.instance
             if (s != null) s.startListening() else {
@@ -158,12 +168,13 @@ class MainActivity : Activity() {
                     "• Or use the \"Talk\" button in the notification or the Quick Settings tile.\n\n" +
                     "Try: \"play Bohemian Rhapsody by Queen\", \"play the album Thriller\", \"shuffle Drake\", " +
                     "\"play my workout playlist\", \"shuffle everything\", \"next\", \"previous\", \"pause\", " +
-                    "\"volume up\", \"what's playing\"."
+                    "\"volume up\", \"what's playing\", \"open Maps\", \"talk to Gemini\"."
             )
         )
 
         column.addView(text("Settings", 18f))
         column.addView(toggle("Tap-tap on glasses to talk", Prefs.TAP_GESTURE))
+        column.addView(toggle("Start automatically when glasses connect", Prefs.AUTO_START))
         column.addView(toggle("Use Samsung Music (off = built-in player for phone files)", Prefs.PREFER_SAMSUNG))
         column.addView(toggle("Speak replies in the glasses", Prefs.SPEAK_REPLIES))
 

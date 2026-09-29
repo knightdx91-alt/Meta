@@ -37,6 +37,7 @@ class GlassesService : Service() {
     private lateinit var samsung: SamsungMusic
     private lateinit var local: LocalPlayer
     private lateinit var speaker: Speaker
+    private lateinit var launcher: AppLauncher
     private lateinit var sessionManager: MediaSessionManager
 
     @Volatile
@@ -44,6 +45,8 @@ class GlassesService : Service() {
     private var busy = false
     private var suppressGesturesUntil = 0L
     private var lastUsedLocal = false
+    /** False if Android refused mic access because we were started from the background. */
+    private var micReady = false
     var status: String = "Ready"
         private set
 
@@ -59,6 +62,7 @@ class GlassesService : Service() {
         voice = GlassesVoice(this)
         samsung = SamsungMusic(this)
         speaker = Speaker(this)
+        launcher = AppLauncher(this)
         local = LocalPlayer(this) { playing -> onPlayback(LOCAL_KEY, playing) }
         sessionManager = getSystemService(MediaSessionManager::class.java)
         goForeground()
@@ -67,7 +71,11 @@ class GlassesService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_LISTEN -> startListening()
+            ACTION_LISTEN -> {
+                // A notification tap lets us (re)claim the mic even from the background.
+                if (!micReady) goForeground()
+                startListening()
+            }
             ACTION_STOP -> {
                 stopSelf()
                 return START_NOT_STICKY
@@ -154,6 +162,11 @@ class GlassesService : Service() {
 
     fun startListening() {
         if (busy) return
+        if (!micReady) goForeground()
+        if (!micReady) {
+            say("Tap Talk in the Glasses Tunes notification once to turn the microphone on") {}
+            return
+        }
         busy = true
         val target = currentTarget()
         val wasPlaying = target.playing
@@ -242,6 +255,31 @@ class GlassesService : Service() {
             is Command.Play -> {
                 if (pauseFirst) target.pause()
                 playRequest(command.request, resumeIfNeeded)
+            }
+            Command.Assistant -> say("Opening Gemini") {
+                if (!launcher.openAssistant()) say("I couldn't open Gemini") { resumeIfNeeded() }
+                // Leave the music paused so the assistant can hear you.
+                finished("Opened Gemini")
+            }
+            is Command.OpenApp -> {
+                val app = launcher.find(command.name)
+                if (app == null) {
+                    say("I couldn't find an app called ${command.name}") {
+                        resumeIfNeeded()
+                        finished("No app \"${command.name}\"")
+                    }
+                } else {
+                    val hint = when {
+                        !launcher.canOpenFromBackground() -> ". Tap the notification to open it"
+                        launcher.isLocked() -> ". Unlock your phone to use it"
+                        else -> ""
+                    }
+                    say("Opening ${app.label}$hint") {
+                        launcher.open(app)
+                        resumeIfNeeded()
+                        finished("Opened ${app.label}")
+                    }
+                }
             }
             is Command.Unknown -> say("Sorry, I heard: ${command.heard}. Try saying play, then a song, artist, or album.") {
                 resumeIfNeeded()
@@ -388,18 +426,24 @@ class GlassesService : Service() {
     }
 
     private fun goForeground() {
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(
-            NotificationChannel(CHANNEL, getString(R.string.channel_name), NotificationManager.IMPORTANCE_LOW)
-        )
+        createChannel(this)
         val notification = buildNotification()
-        if (Build.VERSION.SDK_INT >= 30) {
+        if (Build.VERSION.SDK_INT < 30) {
+            startForeground(NOTIFICATION_ID, notification)
+            micReady = true
+            return
+        }
+        micReady = try {
             startForeground(
                 NOTIFICATION_ID, notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
             )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+            true
+        } catch (e: SecurityException) {
+            // Android 14+: started from the background, so no mic until the user taps something of ours.
+            Log.w(TAG, "microphone not allowed yet", e)
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+            false
         }
     }
 
@@ -421,7 +465,7 @@ class GlassesService : Service() {
 
     companion object {
         private const val TAG = "GlassesService"
-        private const val CHANNEL = "connector"
+        const val CHANNEL = "connector"
         private const val NOTIFICATION_ID = 1
         private const val LOCAL_KEY = "local"
         const val ACTION_LISTEN = "com.knightdx.glassestunes.LISTEN"
@@ -432,6 +476,12 @@ class GlassesService : Service() {
 
         /** Lets the open app screen show live status. */
         var onStatus: ((String) -> Unit)? = null
+
+        fun createChannel(context: Context) {
+            context.getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel(CHANNEL, context.getString(R.string.channel_name), NotificationManager.IMPORTANCE_LOW)
+            )
+        }
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, GlassesService::class.java))

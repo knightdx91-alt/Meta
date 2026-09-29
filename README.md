@@ -44,6 +44,26 @@ Things you can say:
 | "pause", "play", "next", "previous" | playback control for whatever is playing |
 | "volume up" / "volume down" | the phone's media volume |
 | "what's playing" | reads out the song and artist |
+| "open Maps" / "launch WhatsApp" / "start camera" | opens that app |
+| "talk to Gemini" / "hey Google" / "Gemini Live" | opens your phone's assistant (Gemini) listening |
+
+## Auto-start and the lock screen
+
+- **Auto-start**: when your glasses connect over Bluetooth, the connector
+  starts on its own, and it stops when they disconnect. The app recognizes the
+  glasses by their Bluetooth name (Ray-Ban, Oakley or Meta). This needs
+  "Display over other apps". Without it you get a "Glasses connected, tap to
+  turn on voice control" notification instead.
+- **Screen off or locked**: music commands, playback control, volume and
+  "what's playing" all work with the phone in your pocket.
+- **Opening apps while locked**: the app does open, but Android keeps it
+  behind the lock screen until you unlock. The app tells you so. Apps built for
+  the lock screen (camera, calls, navigation) usually show over it. To keep
+  the phone unlocked while the glasses are connected, add them under Settings →
+  Lock screen → Extend Unlock (Smart Lock) → Trusted devices.
+- **Gemini**: "talk to Gemini" opens your default assistant. On the lock
+  screen, Gemini only does what its lock-screen setting allows. Android has no
+  public way for another app to jump straight into Gemini *Live*.
 
 ## Install
 
@@ -55,10 +75,13 @@ Things you can say:
    when Android asks.
 3. Open **Glasses Tunes**:
    - **1 · Grant permissions & start connector** asks for the microphone,
-     music-file and notification permissions.
+     music-file, notification and Nearby devices (to notice the glasses)
+     permissions.
    - **2 · Allow media control access** opens *Notification access*. Turn on
      Glasses Tunes. Android requires this before an app can control Samsung
      Music's playback. The app doesn't read your notifications.
+   - **3 · Allow display over other apps** lets the app auto-start when the
+     glasses connect and open apps hands-free.
 4. Make sure the glasses are connected to the phone over Bluetooth and set as
    the audio device, the same way they are for calls.
 
@@ -99,5 +122,7 @@ The checklist at the top of the app shows what's working. There's also a
 | `LibraryMatcher.kt` | fuzzy match of "play X" against your songs (unit tested) |
 | `TapTapDetector.kt` | pause→play gesture detection (unit tested) |
 | `TalkTileService.kt` | Quick Settings tile |
+| `AppLauncher.kt` | "open <app>" and "talk to Gemini" |
+| `GlassesConnection.kt` | auto start/stop when the glasses connect or disconnect |
 
 Run the tests with `./gradlew testDebugUnitTest`.
