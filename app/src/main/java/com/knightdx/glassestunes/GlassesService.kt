@@ -9,6 +9,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
@@ -38,6 +40,9 @@ class GlassesService : Service() {
     private lateinit var local: LocalPlayer
     private lateinit var speaker: Speaker
     private lateinit var launcher: AppLauncher
+    private lateinit var jarvis: JarvisWakeWord
+    private var jarvisError: String? = null
+    private var jarvisRetryAt = 0L
     private lateinit var sessionManager: MediaSessionManager
 
     @Volatile
@@ -54,6 +59,13 @@ class GlassesService : Service() {
     private val watched = HashMap<MediaController, MediaController.Callback>()
     private val sessionsListener = MediaSessionManager.OnActiveSessionsChangedListener { watch(it.orEmpty()) }
 
+    /** Glasses connecting/disconnecting shows up as their Bluetooth mic appearing/disappearing. */
+    private val deviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) = scheduleJarvisUpdate(1500)
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) = scheduleJarvisUpdate(300)
+    }
+    private val jarvisUpdate = Runnable { updateJarvis() }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -63,6 +75,8 @@ class GlassesService : Service() {
         samsung = SamsungMusic(this)
         speaker = Speaker(this)
         launcher = AppLauncher(this)
+        jarvis = JarvisWakeWord(this, onWake = ::onJarvis, onError = ::onJarvisError)
+        getSystemService(AudioManager::class.java).registerAudioDeviceCallback(deviceCallback, main)
         local = LocalPlayer(this) { playing -> onPlayback(LOCAL_KEY, playing) }
         sessionManager = getSystemService(MediaSessionManager::class.java)
         goForeground()
@@ -93,7 +107,11 @@ class GlassesService : Service() {
         }
         watched.forEach { (c, cb) -> c.unregisterCallback(cb) }
         watched.clear()
+        main.removeCallbacks(jarvisUpdate)
+        getSystemService(AudioManager::class.java).unregisterAudioDeviceCallback(deviceCallback)
+        jarvis.release()
         voice.cancel()
+        voice.releaseGlassesMic()
         local.release()
         speaker.shutdown()
         io.shutdownNow()
@@ -114,6 +132,61 @@ class GlassesService : Service() {
         } catch (e: SecurityException) {
             Log.i(TAG, "notification access not granted yet; tap-tap gesture only works with the built-in player")
         }
+        // Settings may have changed: restart Jarvis with them.
+        jarvisRetryAt = 0
+        jarvis.stop()
+        scheduleJarvisUpdate(0)
+    }
+
+    // ---- "Jarvis" wake word -------------------------------------------------
+
+    val jarvisStatus: String
+        get() = when {
+            !Prefs.jarvis(this) -> "Jarvis is off"
+            jarvisError != null -> jarvisError!!
+            jarvis.isRunning -> "Listening for \"Jarvis\""
+            !voice.glassesMicConnected() -> "Jarvis waits for your glasses to connect"
+            Prefs.jarvisOnlyWhenIdle(this) && anythingPlaying() -> "Jarvis is paused while music plays"
+            !micReady -> "Tap Talk in the notification once to turn on the mic"
+            else -> "Jarvis is starting…"
+        }
+
+    private fun scheduleJarvisUpdate(delayMs: Long) {
+        main.removeCallbacks(jarvisUpdate)
+        main.postDelayed(jarvisUpdate, delayMs)
+    }
+
+    private fun anythingPlaying(): Boolean = local.isPlaying ||
+        samsung.activeControllers().any { it.packageName != packageName && it.playbackState?.state == PlaybackState.STATE_PLAYING }
+
+    /** Start or stop listening for "Jarvis" to match settings, glasses connection and playback. */
+    private fun updateJarvis() {
+        if (busy) return // resumes from finished()
+        val want = Prefs.jarvis(this) && micReady && voice.glassesMicConnected() &&
+            !(Prefs.jarvisOnlyWhenIdle(this) && anythingPlaying()) &&
+            SystemClock.elapsedRealtime() >= jarvisRetryAt
+        if (want && !jarvis.isRunning) {
+            val mic = voice.holdGlassesMic() ?: return
+            jarvisError = null
+            if (!jarvis.start(mic)) voice.releaseGlassesMic()
+        } else if (!want) {
+            jarvis.stop()
+            voice.releaseGlassesMic()
+        }
+        onStatus?.invoke(status)
+    }
+
+    private fun onJarvis() {
+        Log.i(TAG, "wake word")
+        startListening(fromWakeWord = true)
+    }
+
+    private fun onJarvisError(message: String) {
+        jarvisError = message
+        jarvisRetryAt = SystemClock.elapsedRealtime() + 60_000
+        voice.releaseGlassesMic()
+        setStatus(message)
+        scheduleJarvisUpdate(60_500)
     }
 
     val librarySize get() = library.size
@@ -151,7 +224,9 @@ class GlassesService : Service() {
         if (detector.onPlaybackChanged(playing, now)) {
             Log.i(TAG, "tap-tap on $key")
             startListening()
+            return
         }
+        if (Prefs.jarvisOnlyWhenIdle(this)) scheduleJarvisUpdate(800)
     }
 
     private fun quietGestures() {
@@ -160,14 +235,19 @@ class GlassesService : Service() {
 
     // ---- listening ----------------------------------------------------------
 
-    fun startListening() {
+    fun startListening(fromWakeWord: Boolean = false) {
         if (busy) return
-        if (!micReady) goForeground()
+        if (!micReady) {
+            goForeground()
+            if (micReady) scheduleJarvisUpdate(0)
+        }
         if (!micReady) {
             say("Tap Talk in the Glasses Tunes notification once to turn the microphone on") {}
             return
         }
         busy = true
+        // Free the mic for speech recognition (the glasses link stays open).
+        jarvis.stop()
         val target = currentTarget()
         val wasPlaying = target.playing
         quietGestures()
@@ -175,7 +255,8 @@ class GlassesService : Service() {
         setStatus("Listening…")
         voice.listen { result ->
             when (result) {
-                is GlassesVoice.Result.Failed -> say(result.reason) {
+                // A false "Jarvis" shouldn't nag you, so wake-word misses stay quiet.
+                is GlassesVoice.Result.Failed -> say(if (fromWakeWord) "" else result.reason) {
                     if (wasPlaying) target.resume()
                     finished("Ready")
                 }
@@ -204,6 +285,8 @@ class GlassesService : Service() {
         quietGestures()
         busy = false
         setStatus(newStatus)
+        // Let a started song settle before deciding whether Jarvis should listen.
+        scheduleJarvisUpdate(1000)
     }
 
     private fun execute(command: Command, target: Target, wasPlaying: Boolean, pauseFirst: Boolean = false) {
@@ -370,6 +453,10 @@ class GlassesService : Service() {
     }
 
     private fun say(text: String, then: () -> Unit) {
+        if (text.isEmpty()) {
+            then()
+            return
+        }
         setStatus(text)
         if (Prefs.speakReplies(this)) speaker.say(text, then) else then()
     }

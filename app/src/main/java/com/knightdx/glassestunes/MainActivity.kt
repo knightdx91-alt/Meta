@@ -109,6 +109,10 @@ class MainActivity : Activity() {
             ),
             line(samsung.isInstalled(), if (samsung.isInstalled()) "Samsung Music installed" else "Samsung Music not found — built-in player will be used"),
             line(service != null, if (service != null) "Connector running · ${service.librarySize} songs on phone" else "Connector stopped"),
+            line(
+                service?.jarvisStatus == "Listening for \"Jarvis\"",
+                service?.jarvisStatus ?: "Jarvis starts with the connector",
+            ),
         ).joinToString("\n")
         service?.let { statusView.text = it.status }
     }
@@ -132,7 +136,11 @@ class MainActivity : Activity() {
             text = label
             isChecked = Prefs.get(this@MainActivity, key)
             setPadding(0, pad / 2, 0, pad / 2)
-            setOnCheckedChangeListener { _, on -> Prefs.set(this@MainActivity, key, on) }
+            setOnCheckedChangeListener { _, on ->
+                Prefs.set(this@MainActivity, key, on)
+                GlassesService.instance?.refresh()
+                statusView.postDelayed({ updateChecklist() }, 800)
+            }
         }
 
         column.addView(text(getString(R.string.app_name), 24f))
@@ -164,12 +172,25 @@ class MainActivity : Activity() {
         column.addView(text("How to talk to it", 18f))
         column.addView(
             text(
-                "• Tap the glasses' temple twice (pause → play) — you'll hear a beep, then speak.\n" +
+                "• Say \"Jarvis\", wait for the beep, then say your command.\n" +
+                    "• Or tap the glasses' temple twice (pause → play), then speak after the beep.\n" +
                     "• Or use the \"Talk\" button in the notification or the Quick Settings tile.\n\n" +
                     "Try: \"play Bohemian Rhapsody by Queen\", \"play the album Thriller\", \"shuffle Drake\", " +
                     "\"play my workout playlist\", \"shuffle everything\", \"next\", \"previous\", \"pause\", " +
                     "\"volume up\", \"what's playing\", \"open Maps\", \"talk to Gemini\"."
             )
+        )
+
+        column.addView(text("Jarvis wake word", 18f))
+        column.addView(
+            text(
+                "Say \"Jarvis\", pause, and wait for the beep. Jarvis runs entirely on your phone " +
+                    "(open-source Vosk speech model), with no account, no internet, and no audio leaving the phone."
+            )
+        )
+        column.addView(toggle("Always listen for \"Jarvis\" while glasses are connected", Prefs.JARVIS))
+        column.addView(
+            toggle("Pause Jarvis while music plays (keeps music in full quality)", Prefs.JARVIS_IDLE_ONLY)
         )
 
         column.addView(text("Settings", 18f))

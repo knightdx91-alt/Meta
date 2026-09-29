@@ -25,10 +25,11 @@ or with its built-in player for the audio files on your phone.
 
 ## How you use it
 
-1. **Tap-tap**: tap the glasses' temple once to pause, then again within about
+1. **Say "Jarvis"**, pause, and wait for the beep, then say your command.
+2. **Tap-tap**: tap the glasses' temple once to pause, then again within about
    1.5 s to resume. The app treats that as "listen". You'll hear a beep in the
    glasses, then say your command.
-2. Or press **🎤 Talk** in the notification, or add the **Talk to music**
+3. Or press **🎤 Talk** in the notification, or add the **Talk to music**
    Quick Settings tile.
 
 Things you can say:
@@ -46,6 +47,30 @@ Things you can say:
 | "what's playing" | reads out the song and artist |
 | "open Maps" / "launch WhatsApp" / "start camera" | opens that app |
 | "talk to Gemini" / "hey Google" / "Gemini Live" | opens your phone's assistant (Gemini) listening |
+
+## The "Jarvis" wake word
+
+Whenever the glasses are connected, the app listens for **"Jarvis"** (or "Hey
+Jarvis") through the glasses' microphone.
+
+- **Fully offline and free.** It uses [Vosk](https://alphacephei.com/vosk/), an
+  open-source speech recognizer, with its small English model built into the
+  app. There's no account, no key and no internet, and audio never leaves the
+  phone.
+- **Only the name on its own triggers it.** "I was talking to Jarvis
+  yesterday" doesn't. The recognizer also knows a set of sound-alike words
+  ("jars", "service", "harvest", "nervous"…) so those don't trigger it either.
+- **Tested on synthetic voices** (`tools/jarvis_eval.py`: 6 voices, with and
+  without background noise): 67 of 72 "Jarvis" calls detected, and 0 false
+  triggers out of 492 similar-sounding or everyday phrases. Real voices will
+  differ; if it misses you, say it a little more slowly.
+- **The catch: music sounds worse while Jarvis listens.** Keeping the glasses'
+  mic open holds them in phone-call Bluetooth mode, so music drops to
+  call quality (mono, muffled) and the glasses' battery drains faster. If
+  that bothers you, turn on **Pause Jarvis while music plays**. Music then
+  stays full quality, Jarvis listens whenever nothing is playing, and you use
+  tap-tap while music is on.
+- Turn Jarvis off completely with **Always listen for "Jarvis"** in the app.
 
 ## Auto-start and the lock screen
 
@@ -98,10 +123,12 @@ The checklist at the top of the app shows what's working. There's also a
 
 ## Limits
 
-- **Not "Hey Meta."** The wake word and Meta AI belong to Meta. Use tap-tap or
-  the Talk button instead.
-- While you speak, the glasses switch to call-quality Bluetooth for about 2 to
-  5 seconds, so the app pauses the music during that time.
+- **Not "Hey Meta."** The glasses handle that wake word themselves and start
+  Meta AI, so this app uses "Jarvis".
+- While you speak a command, the app pauses the music. Without Jarvis, the
+  glasses also switch to call-quality Bluetooth for those 2 to 5 seconds.
+- The phone first has to unpack the Jarvis speech model (about 70 MB). This
+  happens once, a few seconds after the first start.
 - Speech recognition uses the phone's Google speech service, which may need a
   data connection unless offline speech is installed.
 - If a double-tap on your glasses is set to skip tracks, leave a short beat
@@ -124,5 +151,8 @@ The checklist at the top of the app shows what's working. There's also a
 | `TalkTileService.kt` | Quick Settings tile |
 | `AppLauncher.kt` | "open <app>" and "talk to Gemini" |
 | `GlassesConnection.kt` | auto start/stop when the glasses connect or disconnect |
+| `JarvisWakeWord.kt` | always-on "Jarvis" listener (Vosk, offline) |
+| `JarvisDetector.kt` | wake-word grammar and acceptance rule (unit tested) |
+| `tools/jarvis_eval.py` | measures detection and false triggers on synthetic speech |
 
 Run the tests with `./gradlew testDebugUnitTest`.

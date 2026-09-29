@@ -35,13 +35,33 @@ class GlassesVoice(private val context: Context) {
     private var tone: ToneGenerator? = null
     private var legacySco = false
     private var finished = true
+    /** The Bluetooth voice link to the glasses is open. */
+    private var routeActive = false
+    /** Keep the link open between commands (while listening for "Jarvis"). */
+    private var routeHeld = false
 
     /** True if a Bluetooth headset microphone (the glasses) is connected. */
     fun glassesMicConnected(): Boolean = findGlassesMic() != null
 
     fun glassesName(): String? = findGlassesMic()?.productName?.toString()
 
-    private fun findGlassesMic(): AudioDeviceInfo? {
+    /**
+     * Open the glasses' mic and keep it open until [releaseGlassesMic], so the
+     * wake word can listen continuously. Returns the mic to record from.
+     */
+    fun holdGlassesMic(): AudioDeviceInfo? {
+        val mic = findGlassesMic() ?: return null
+        if (!routeActive && !routeToGlasses()) return null
+        routeHeld = true
+        return mic
+    }
+
+    fun releaseGlassesMic() {
+        routeHeld = false
+        if (finished) releaseRoute()
+    }
+
+    fun findGlassesMic(): AudioDeviceInfo? {
         if (Build.VERSION.SDK_INT >= 31) {
             audio.availableCommunicationDevices
                 .firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
@@ -59,9 +79,15 @@ class GlassesVoice(private val context: Context) {
                 return@post
             }
             finished = false
-            val viaGlasses = routeToGlasses()
+            val alreadyOpen = routeActive
+            val viaGlasses = alreadyOpen || routeToGlasses()
             // Give the Bluetooth voice link a moment to open before we beep.
-            main.postDelayed({ beepThenRecognize(viaGlasses, onResult) }, if (viaGlasses) 900L else 100L)
+            val delay = when {
+                alreadyOpen -> 150L
+                viaGlasses -> 900L
+                else -> 100L
+            }
+            main.postDelayed({ beepThenRecognize(viaGlasses, onResult) }, delay)
         }
     }
 
@@ -122,13 +148,13 @@ class GlassesVoice(private val context: Context) {
         recognizer = null
         tone?.release()
         tone = null
-        releaseRoute()
+        if (!routeHeld) releaseRoute()
         onResult?.invoke(result)
     }
 
     private fun routeToGlasses(): Boolean {
         val mic = findGlassesMic() ?: return false
-        return try {
+        routeActive = try {
             if (Build.VERSION.SDK_INT >= 31) {
                 audio.setCommunicationDevice(mic)
             } else {
@@ -145,9 +171,11 @@ class GlassesVoice(private val context: Context) {
             Log.w(TAG, "could not route to glasses mic", e)
             false
         }
+        return routeActive
     }
 
     private fun releaseRoute() {
+        routeActive = false
         try {
             if (Build.VERSION.SDK_INT >= 31) {
                 audio.clearCommunicationDevice()
