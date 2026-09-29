@@ -10,7 +10,8 @@ data class Track(
     val genre: String = "",
 )
 
-data class Selection(val tracks: List<Track>, val description: String)
+/** [unsure]: found only by how it sounds (e.g. a foreign title heard as English words), so ask before playing. */
+data class Selection(val tracks: List<Track>, val description: String, val unsure: Boolean = false)
 
 /**
  * Fuzzy-matches a spoken request against the songs on the phone.
@@ -98,7 +99,13 @@ object LibraryMatcher {
         return (ratio * 80).toInt()
     }
 
-    fun select(library: List<Track>, request: PlayRequest, random: kotlin.random.Random = kotlin.random.Random): Selection? {
+    /** [heardInEnglish]: the words came from English speech recognition (false in a language mode). */
+    fun select(
+        library: List<Track>,
+        request: PlayRequest,
+        random: kotlin.random.Random = kotlin.random.Random,
+        heardInEnglish: Boolean = true,
+    ): Selection? {
         if (library.isEmpty()) return null
         val result = when (request.focus) {
             Focus.ARTIST -> byArtist(library, request.query)
@@ -109,8 +116,22 @@ object LibraryMatcher {
             Focus.GENRE -> byGenre(library, request.query) ?: best(library, request.query)
             // Samsung Music keeps its playlists to itself, so treat as a general search.
             Focus.PLAYLIST, Focus.ANY -> best(library, request.query)
-        } ?: return null
+        } ?: guessBySound(library, request.query, heardInEnglish) ?: return null
         return if (request.shuffle) result.copy(tracks = result.tracks.shuffled(random)) else result
+    }
+
+    /** Last resort: a title or artist that *sounds* like what was heard (see [SoundMatcher]). */
+    fun guessBySound(library: List<Track>, heard: String, heardInEnglish: Boolean = true): Selection? {
+        val titles = library.map { it.title }
+        val artists = library.map { it.artist }.filter { normalize(it) !in setOf("", "unknown", "unknown artist") }
+        val name = SoundMatcher.best(titles + artists, heard, heardInEnglish) ?: return null
+        val song = library.firstOrNull { it.title == name }
+        return if (song != null) {
+            val rest = library.filter { it.id != song.id && it.artist == song.artist }.shuffled()
+            Selection(listOf(song) + rest, "${song.title} by ${song.artist}", unsure = true)
+        } else {
+            Selection(library.filter { it.artist == name }.shuffled(), name, unsure = true)
+        }
     }
 
     fun shuffleAll(library: List<Track>, random: kotlin.random.Random = kotlin.random.Random): Selection? =

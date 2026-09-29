@@ -71,7 +71,8 @@ class GlassesVoice(private val context: Context) {
             .firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
     }
 
-    fun listen(onResult: (Result) -> Unit) {
+    /** Listen for one phrase. [language] (e.g. "it-IT") recognizes that language instead of the phone's. */
+    fun listen(language: String? = null, onResult: (Result) -> Unit) {
         main.post {
             if (!finished) return@post
             if (!SpeechRecognizer.isRecognitionAvailable(context)) {
@@ -87,7 +88,7 @@ class GlassesVoice(private val context: Context) {
                 viaGlasses -> 900L
                 else -> 100L
             }
-            main.postDelayed({ beepThenRecognize(viaGlasses, onResult) }, delay)
+            main.postDelayed({ beepThenRecognize(viaGlasses, language, onResult) }, delay)
         }
     }
 
@@ -95,7 +96,7 @@ class GlassesVoice(private val context: Context) {
         main.post { finish(null, Result.Failed("cancelled")) }
     }
 
-    private fun beepThenRecognize(viaGlasses: Boolean, onResult: (Result) -> Unit) {
+    private fun beepThenRecognize(viaGlasses: Boolean, language: String?, onResult: (Result) -> Unit) {
         if (finished) return
         try {
             val stream = if (viaGlasses) AudioManager.STREAM_VOICE_CALL else AudioManager.STREAM_MUSIC
@@ -129,6 +130,10 @@ class GlassesVoice(private val context: Context) {
             .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
             .putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
             .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
+        if (language != null) {
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, language)
+        }
         sr.startListening(intent)
         main.postDelayed({ finish(onResult, Result.Failed("I didn't hear anything.")) }, 12_000)
     }

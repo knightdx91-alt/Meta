@@ -13,6 +13,11 @@ data class PlayRequest(
 
 sealed class Command {
     data class Play(val request: PlayRequest) : Command()
+    /**
+     * "play an Italian song": the title is asked for and heard in that language,
+     * so speech recognition spells it right. [title] is set if one was already said.
+     */
+    data class PlayInLanguage(val languageTag: String, val languageName: String, val title: String? = null) : Command()
     object ShuffleAll : Command()
     object Resume : Command()
     object Pause : Command()
@@ -109,6 +114,29 @@ object CommandParser {
     /** For confirmations ("Send it?"). */
     fun isYes(raw: String): Boolean = normalizeLight(raw).removeSuffix(" please").trim() in yesWords
 
+    /** Song languages you can ask for by name, with their speech-recognition language tags. */
+    val songLanguages = mapOf(
+        "italian" to "it-IT", "norwegian" to "nb-NO", "spanish" to "es-ES", "french" to "fr-FR", "german" to "de-DE",
+        "portuguese" to "pt-BR", "swedish" to "sv-SE", "danish" to "da-DK", "dutch" to "nl-NL", "finnish" to "fi-FI",
+        "polish" to "pl-PL", "greek" to "el-GR", "turkish" to "tr-TR",
+    )
+
+    private fun parseLanguagePlay(text: String): Command? {
+        val names = songLanguages.keys.joinToString("|")
+        fun cmd(name: String, title: String?) =
+            Command.PlayInLanguage(songLanguages.getValue(name), name.replaceFirstChar { it.uppercase() }, title?.trim()?.ifBlank { null })
+        // "italian", "italian song", "play an italian song", "play something in norwegian", "play some italian music"
+        Regex("^(?:(?:play|put on)\\s+)?(?:an?\\s+|some\\s+|my\\s+|something\\s+in\\s+|in\\s+)?($names)(?:\\s+(?:song|songs|music|track|tune))?$")
+            .find(text)?.let { return cmd(it.groupValues[1], null) }
+        // "play the italian song vivo per lei", "play italian song vivo per lei"
+        Regex("^(?:play|put on)\\s+(?:the\\s+|an?\\s+)?($names)\\s+(?:song|track)\\s+(.+)$")
+            .find(text)?.let { return cmd(it.groupValues[1], it.groupValues[2]) }
+        // "play vivo per lei in italian"
+        Regex("^(?:play|put on)\\s+(.+?)\\s+in\\s+($names)$")
+            .find(text)?.let { return cmd(it.groupValues[2], it.groupValues[1]) }
+        return null
+    }
+
     fun parse(raw: String): Command {
         val text = normalize(raw)
         if (text.isEmpty()) return Command.Unknown(raw)
@@ -143,6 +171,8 @@ object CommandParser {
 
         parseMessaging(light)?.let { return it }
         parseCall(text)?.let { return it }
+
+        parseLanguagePlay(text)?.let { return it }
 
         val shuffleMatch = Regex("^(shuffle|play shuffled|shuffle play)\\s+(.+)$").find(text)
         if (shuffleMatch != null) {
@@ -284,7 +314,7 @@ object CommandParser {
     fun normalizeLight(raw: String): String {
         var t = raw.lowercase()
             .replace('’', '\'')
-            .replace(Regex("[^a-z0-9' &+]+"), " ")
+            .replace(Regex("[^\\p{L}0-9' &+]+"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
         repeat(3) { t = t.replace(leadingFiller, "").trim() }
@@ -294,7 +324,7 @@ object CommandParser {
     fun normalize(raw: String): String {
         var t = raw.lowercase()
             .replace('’', '\'')
-            .replace(Regex("[^a-z0-9' &]+"), " ")
+            .replace(Regex("[^\\p{L}0-9' &]+"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
         // Filler can be stacked ("hey can you ..."), so strip repeatedly.

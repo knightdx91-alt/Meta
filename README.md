@@ -65,6 +65,29 @@ and roses" finds "Guns N' Roses", and small mishearings ("rapsody") still
 match. "by" or "from" both work: "play Halo by Beyoncé", "play Halo from
 Beyoncé", or just "play Halo".
 
+A title on its own works too: "play Sad" plays the song called "Sad" (an
+exact title beats artists or albums that merely contain the word).
+
+### Songs in other languages (Italian, Norwegian, …)
+
+Speech recognition listens in your phone's language, so it writes a foreign
+title as English sound-alikes ("Sjømannen" comes out as "sherman", "Andiamo"
+as "and jamo"). Two things help:
+
+- **Just say it.** If nothing matches normally, the app compares how the
+  words *sound*, using Italian and Norwegian spelling rules ("gn" = "ny", "kj"
+  and "sj" = "sh", "ci" = "chi", "j" = "y"). If one of your songs clearly
+  sounds closest, it asks **"Did you mean Andiamo by Fabio Rovazzi?"** and
+  plays it when you say yes.
+- **Say the language** for a reliable result: "play an Italian song" (or
+  "Norwegian", "play something in Norwegian"). It asks **"Which Italian
+  song?"** and listens to your answer *in Italian*, so the title is written
+  correctly. "play Vivo per lei in Italian" works in one go too. Say "any" to
+  shuffle. Also supported: Spanish, French, German, Portuguese, Swedish,
+  Danish, Dutch, Finnish, Polish, Greek and Turkish. Recognizing another
+  language needs an internet connection, unless you've downloaded that
+  language for offline speech in Google's settings.
+
 The app first finds the song in your phone's music library (the same one
 Samsung Music uses), then asks Samsung Music to play that exact song. Samsung
 Music often ignores requests from other apps, so if it doesn't start within a
@@ -257,6 +280,7 @@ report.
 | `ScreenControlService.kt` | accessibility service: tap, scroll, type, back/home, WhatsApp Send |
 | `JarvisWakeWord.kt` | always-on "Jarvis" listener (Vosk, offline) |
 | `JarvisDetector.kt` | wake-word grammar and acceptance rule (unit tested) |
+| `SoundMatcher.kt` | matches foreign titles by sound when they're heard as English words (unit tested) |
 | `AskAssistant.kt` | questions → Gemini with Google Search, answers cleaned up for speaking |
 | `tools/jarvis_eval.py` | measures detection and false triggers on synthetic speech |
 | `tools/device_check/` | runs the parser/matchers on a real Android runtime (`run.sh`), catching Android-only bugs unit tests miss |

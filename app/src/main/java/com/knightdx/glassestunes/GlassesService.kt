@@ -414,6 +414,10 @@ class GlassesService : Service() {
                 if (pauseFirst) target.pause()
                 shuffleAll()
             }
+            is Command.PlayInLanguage -> {
+                if (pauseFirst) target.pause()
+                playInLanguage(command, resumeIfNeeded)
+            }
             is Command.Play -> {
                 if (pauseFirst) target.pause()
                 playRequest(command.request, resumeIfNeeded)
@@ -494,10 +498,10 @@ class GlassesService : Service() {
     // ---- conversations ------------------------------------------------------
 
     /** Ask a question and listen for the answer (null if nothing was heard). */
-    private fun ask(question: String, onAnswer: (String?) -> Unit) {
+    private fun ask(question: String, language: String? = null, onAnswer: (String?) -> Unit) {
         say(question) {
             setStatus("Listening…")
-            voice.listen { result ->
+            voice.listen(language) { result ->
                 guard("handling an answer") { onAnswer((result as? GlassesVoice.Result.Heard)?.phrases?.firstOrNull()) }
             }
         }
@@ -732,25 +736,65 @@ class GlassesService : Service() {
                 notInLibrary(request, spoken, songs.isEmpty(), onNotFound)
                 return@withLibrary
             }
-            say("Playing ${selection.description}") {
-                if (!useSamsung()) {
-                    playLocalSelection(selection)
-                    finished("Playing ${selection.description}")
-                    return@say
-                }
-                samsung.playTrack(selection.tracks.first()) { ok ->
-                    guard("Samsung Music") {
-                        if (ok) {
-                            lastUsedLocal = false
-                            finished("Samsung Music: ${selection.description}")
-                        } else {
-                            playLocalSelection(selection)
-                            finished("Playing ${selection.description}")
-                        }
+            playFound(selection, onNotFound)
+        }
+    }
+
+    /** A sound-alike guess (e.g. a foreign title heard as English words) is confirmed first. */
+    private fun playFound(selection: Selection, done: () -> Unit) {
+        if (!selection.unsure) return playSelection(selection)
+        ask("Did you mean ${selection.description}?") { answer ->
+            if (answer != null && CommandParser.isYes(answer)) {
+                playSelection(selection)
+            } else {
+                end("Okay. For a song in another language, say for example: play an Italian song.", done)
+            }
+        }
+    }
+
+    private fun playSelection(selection: Selection) {
+        say("Playing ${selection.description}") {
+            if (!useSamsung()) {
+                playLocalSelection(selection)
+                finished("Playing ${selection.description}")
+                return@say
+            }
+            samsung.playTrack(selection.tracks.first()) { ok ->
+                guard("Samsung Music") {
+                    if (ok) {
+                        lastUsedLocal = false
+                        finished("Samsung Music: ${selection.description}")
+                    } else {
+                        playLocalSelection(selection)
+                        finished("Playing ${selection.description}")
                     }
                 }
             }
         }
+    }
+
+    /**
+     * "play an Italian song": ask for the title and listen in that language, so
+     * speech recognition spells it the way it's tagged on the phone.
+     */
+    private fun playInLanguage(command: Command.PlayInLanguage, done: () -> Unit) {
+        fun find(title: String, heardInEnglish: Boolean, orElse: () -> Unit) = withLibrary { songs ->
+            if (songs.isEmpty()) return@withLibrary end(libraryProblem(), done)
+            val selection = LibraryMatcher.select(songs, PlayRequest(title), heardInEnglish = heardInEnglish)
+            if (selection == null) orElse() else playFound(selection, done)
+        }
+        val askTitle = {
+            ask("Which ${command.languageName} song?", command.languageTag) { answer ->
+                when {
+                    answer.isNullOrBlank() -> end("Cancelled", done)
+                    CommandParser.normalize(answer) in anyWords -> shuffleAll()
+                    else -> find(answer, heardInEnglish = false) { end("I couldn't find $answer in your music", done) }
+                }
+            }
+        }
+        // A title said in the same breath was heard in English; try it, then ask in the language.
+        val title = command.title
+        if (title != null) find(title, heardInEnglish = true) { askTitle() } else askTitle()
     }
 
     /** Not among the phone's songs. Samsung Music may still know it; otherwise say why it failed. */
@@ -961,6 +1005,11 @@ class GlassesService : Service() {
         private val TEXTING_APPS = setOf("com.google.android.apps.messaging", "com.samsung.android.messaging")
         private const val NOTIFICATION_ID = 1
         private const val LOCAL_KEY = "local"
+        /** "Anything" in the languages you can pick a song in. */
+        private val anyWords = setOf(
+            "any", "anything", "any song", "whatever", "shuffle", "surprise me",
+            "qualsiasi", "qualunque", "una qualsiasi", "hva som helst", "hvilken som helst", "cualquiera", "n'importe",
+        )
         const val ACTION_LISTEN = "com.knightdx.glassestunes.LISTEN"
         const val ACTION_STOP = "com.knightdx.glassestunes.STOP"
 

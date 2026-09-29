@@ -24,6 +24,8 @@ public class DeviceCheck {
             "press play", "can you play some Beyonce on Samsung Music", "random nonsense words",
             "google who won the lakers game", "look up how tall is the Eiffel Tower", "play mister brightside from the killers",
             "play sweet child of mine by guns and roses", "how long do I boil an egg",
+            "play an Italian song", "Norwegian", "play vivo per lei in Italian", "play Con te partirò", "play Kjærlighet",
+            "play Norwegian Wood", "play Sad",
         };
         for (String p : phrases) run("parse \"" + p + "\"", () -> System.out.println("       -> " + CommandParser.INSTANCE.parse(p)));
         run("isYes", () -> CommandParser.INSTANCE.isYes("Yeah, send it."));
@@ -31,7 +33,7 @@ public class DeviceCheck {
             new Track(1, "Bohemian Rhapsody", "Queen", "A Night at the Opera [Remastered]", 11, ""),
             new Track(2, "God's Plan (feat. Someone)", "Drake", "Scorpion", 5, ""),
             new Track(3, "Thriller", "Michael Jackson", "Thriller", 4, "Pop"));
-        run("library match", () -> System.out.println("       -> " + LibraryMatcher.INSTANCE.select(lib, new PlayRequest("queen", Focus.ANY, null, false), kotlin.random.Random.Default)));
+        run("library match", () -> System.out.println("       -> " + LibraryMatcher.INSTANCE.select(lib, new PlayRequest("queen", Focus.ANY, null, false), kotlin.random.Random.Default, true)));
         run("library normalize", () -> System.out.println("       -> " + LibraryMatcher.INSTANCE.normalize("A Night at the Opera [Remastered] (feat. X) & more")));
         List<Contact> contacts = Arrays.asList(new Contact(1, "Mom", Arrays.asList(new Phone("555", "mobile", false)), null),
             new Contact(2, "John Smith", Arrays.asList(new Phone("556", "mobile", true)), "1556@s.whatsapp.net"));
@@ -46,11 +48,19 @@ public class DeviceCheck {
         run("fuzzy song match", () -> {
             List<Track> songs = Arrays.asList(new Track(9, "Mr. Brightside - 2004 Remaster", "The Killers", "Hot Fuss", 2, ""),
                 new Track(10, "Halo", "Beyoncé", "I Am", 2, ""));
-            Selection s1 = LibraryMatcher.INSTANCE.select(songs, new PlayRequest("mister brightside", Focus.SONG, "the killers", false), kotlin.random.Random.Default);
-            Selection s2 = LibraryMatcher.INSTANCE.select(songs, new PlayRequest("halo", Focus.SONG, "beyonce", false), kotlin.random.Random.Default);
+            Selection s1 = LibraryMatcher.INSTANCE.select(songs, new PlayRequest("mister brightside", Focus.SONG, "the killers", false), kotlin.random.Random.Default, true);
+            Selection s2 = LibraryMatcher.INSTANCE.select(songs, new PlayRequest("halo", Focus.SONG, "beyonce", false), kotlin.random.Random.Default, true);
             if (s1 == null || s1.getTracks().get(0).getId() != 9 || s2 == null || s2.getTracks().get(0).getId() != 10) throw new AssertionError(s1 + " / " + s2);
         });
         run("spoken answer cleanup", () -> System.out.println("       -> " + SpokenText.INSTANCE.clean("**The Lakers** won [1]. See https://x.y", 450)));
+        run("sound matching", () -> {
+            List<String> names = Arrays.asList("Andiamo", "Nordlys", "Byen sover", "Sjømannen", "Con te partirò", "Halo");
+            String ga = SoundMatcher.INSTANCE.best(names, "and jamo", true);
+            String gb = SoundMatcher.INSTANCE.best(names, "be and silver", true);
+            String gc = SoundMatcher.INSTANCE.best(names, "con te partiro", false);
+            System.out.println("       -> " + ga + " / " + gb + " / " + gc + " / key " + SoundMatcher.INSTANCE.key("Skjærgården hjerte gli gnocchi", true));
+            if (!"Andiamo".equals(ga) || !"Byen sover".equals(gb) || !"Con te partirò".equals(gc)) throw new AssertionError(ga + gb + gc);
+        });
         run("glasses names", () -> GlassesNames.INSTANCE.isGlasses("Ray-Ban Meta 04B2"));
         System.out.println(failures == 0 ? "ALL PASSED" : failures + " FAILED");
     }
