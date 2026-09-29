@@ -78,22 +78,32 @@ object AutoStart {
                 Log.w("AutoStart", "could not start from background", e)
             }
         }
-        val nm = context.getSystemService(NotificationManager::class.java)
-        GlassesService.createChannel(context)
-        val tap = PendingIntent.getActivity(
-            context, 0, Intent(context, StartConnectorActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            PendingIntent.FLAG_IMMUTABLE,
-        )
-        nm.notify(
-            NOTIFICATION,
-            android.app.Notification.Builder(context, GlassesService.CHANNEL)
-                .setSmallIcon(R.drawable.ic_glasses)
-                .setContentTitle("$glassesName connected")
-                .setContentText("Tap to turn on voice control")
-                .setContentIntent(tap)
-                .setAutoCancel(true)
-                .build(),
-        )
+        tapToStart(context, "$glassesName connected")
+    }
+
+    /** Android stopped the connector in the background and won't let it restart by itself. */
+    fun promptRestart(context: Context) = tapToStart(context, "Glasses Tunes was stopped by Android")
+
+    private fun tapToStart(context: Context, title: String) {
+        try {
+            GlassesService.createChannel(context)
+            val tap = PendingIntent.getActivity(
+                context, 0, Intent(context, StartConnectorActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                PendingIntent.FLAG_IMMUTABLE,
+            )
+            context.getSystemService(NotificationManager::class.java).notify(
+                NOTIFICATION,
+                android.app.Notification.Builder(context, GlassesService.CHANNEL)
+                    .setSmallIcon(R.drawable.ic_glasses)
+                    .setContentTitle(title)
+                    .setContentText("Tap to turn on voice control")
+                    .setContentIntent(tap)
+                    .setAutoCancel(true)
+                    .build(),
+            )
+        } catch (e: RuntimeException) {
+            Log.w("AutoStart", "couldn't post the start prompt", e)
+        }
     }
 
     fun clearPrompt(context: Context) {

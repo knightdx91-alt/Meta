@@ -28,7 +28,7 @@ object LibraryMatcher {
         .replace("'", "")
         .replace("&", " and ")
         .replace(Regex("\\((feat|ft|with)[^)]*\\)"), " ")
-        .replace(Regex("\\[[^]]*]"), " ")
+        .replace(Regex("\\[[^\\]]*\\]"), " ")
         .replace(Regex("[^a-z0-9]+"), " ")
         .replace(Regex("\\s+"), " ")
         .trim()

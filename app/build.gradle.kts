@@ -17,6 +17,8 @@ android {
         ndk {
             // Samsung phones are ARM; skipping emulator ABIs keeps the APK small.
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            // ./gradlew -PwithEmulator assembleDebug also runs on the x86_64 emulator.
+            if (project.hasProperty("withEmulator")) abiFilters += "x86_64"
         }
     }
 

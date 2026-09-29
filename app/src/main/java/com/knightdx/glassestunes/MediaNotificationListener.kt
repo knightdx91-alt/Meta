@@ -26,17 +26,35 @@ import android.util.Log
 class MediaNotificationListener : NotificationListenerService() {
     override fun onListenerConnected() {
         GlassesService.instance?.refresh()
-        try {
-            activeNotifications?.forEach { MessageInbox.add(this, it) }
+        val current: Array<out StatusBarNotification> = try {
+            activeNotifications.orEmpty()
         } catch (e: RuntimeException) {
             Log.w("MessageInbox", "couldn't read current notifications", e)
+            emptyArray()
+        }
+        for (sbn in current) {
+            try {
+                MessageInbox.add(this, sbn)
+            } catch (e: Throwable) {
+                Log.w("MessageInbox", "skipped a notification from ${sbn.packageName}", e)
+            }
         }
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         if (sbn.packageName == packageName) return
-        val entry = MessageInbox.add(this, sbn) ?: return
-        GlassesService.instance?.onNewMessage(entry)
+        // Other apps' notifications can hold data we can't unpack; never let that crash us.
+        val entry = try {
+            MessageInbox.add(this, sbn)
+        } catch (e: Throwable) {
+            Log.w("MessageInbox", "skipped a notification from ${sbn.packageName}", e)
+            null
+        } ?: return
+        try {
+            GlassesService.instance?.onNewMessage(entry)
+        } catch (e: RuntimeException) {
+            Log.w("MessageInbox", "couldn't announce message", e)
+        }
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {

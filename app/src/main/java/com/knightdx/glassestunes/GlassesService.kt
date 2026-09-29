@@ -67,8 +67,9 @@ class GlassesService : Service() {
         override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) = scheduleJarvisUpdate(1500)
         override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) = scheduleJarvisUpdate(300)
     }
-    private val jarvisUpdate = Runnable { updateJarvis() }
-    private val modeListener = AudioManager.OnModeChangedListener { scheduleJarvisUpdate(300) }
+    private val jarvisUpdate = Runnable { guard("Jarvis update") { updateJarvis() } }
+    /** Android 12+ only; the listener type doesn't exist on older versions, so it's created lazily. */
+    private var modeListener: Any? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -84,11 +85,17 @@ class GlassesService : Service() {
         getSystemService(AudioManager::class.java).registerAudioDeviceCallback(deviceCallback, main)
         if (Build.VERSION.SDK_INT >= 31) {
             // Step aside for phone and WhatsApp calls, which need the glasses' mic themselves.
-            getSystemService(AudioManager::class.java).addOnModeChangedListener(mainExecutor, modeListener)
+            val listener = AudioManager.OnModeChangedListener { scheduleJarvisUpdate(300) }
+            modeListener = listener
+            getSystemService(AudioManager::class.java).addOnModeChangedListener(mainExecutor, listener)
         }
         local = LocalPlayer(this) { playing -> onPlayback(LOCAL_KEY, playing) }
         sessionManager = getSystemService(MediaSessionManager::class.java)
-        goForeground()
+        if (!goForeground()) {
+            AutoStart.promptRestart(this)
+            stopSelf()
+            return
+        }
         refresh()
     }
 
@@ -119,7 +126,9 @@ class GlassesService : Service() {
         main.removeCallbacks(jarvisUpdate)
         getSystemService(AudioManager::class.java).unregisterAudioDeviceCallback(deviceCallback)
         if (Build.VERSION.SDK_INT >= 31) {
-            getSystemService(AudioManager::class.java).removeOnModeChangedListener(modeListener)
+            (modeListener as? AudioManager.OnModeChangedListener)?.let {
+                getSystemService(AudioManager::class.java).removeOnModeChangedListener(it)
+            }
         }
         jarvis.release()
         voice.cancel()
@@ -133,7 +142,12 @@ class GlassesService : Service() {
     /** Re-read settings, the music library, and media access (call after the user grants permissions). */
     fun refresh() {
         io.execute {
-            val songs = LocalLibrary.load(this)
+            val songs = try {
+                LocalLibrary.load(this)
+            } catch (e: RuntimeException) {
+                CrashReport.recordProblem(this, "loading music library", e)
+                emptyList()
+            }
             main.post { library = songs }
         }
         val component = ComponentName(this, MediaNotificationListener::class.java)
@@ -146,8 +160,8 @@ class GlassesService : Service() {
         }
         // Settings may have changed: restart Jarvis with them.
         jarvisRetryAt = 0
-        jarvis.stop()
-        scheduleJarvisUpdate(0)
+        jarvis.stop(wait = false) // don't block the screen that called us
+        scheduleJarvisUpdate(300)
     }
 
     // ---- "Jarvis" wake word -------------------------------------------------
@@ -191,7 +205,7 @@ class GlassesService : Service() {
             jarvisError = null
             if (!jarvis.start(mic)) voice.releaseGlassesMic()
         } else if (!want) {
-            jarvis.stop()
+            jarvis.stop(wait = false)
             voice.releaseGlassesMic()
         }
         onStatus?.invoke(status)
@@ -235,7 +249,9 @@ class GlassesService : Service() {
         }
     }
 
-    private fun onPlayback(key: String, playing: Boolean) {
+    private fun onPlayback(key: String, playing: Boolean) = guard("watching playback") { playbackChanged(key, playing) }
+
+    private fun playbackChanged(key: String, playing: Boolean) {
         val detector = detectors.getOrPut(key) { TapTapDetector() }
         val now = SystemClock.elapsedRealtime()
         if (busy || now < suppressGesturesUntil || !Prefs.tapGesture(this)) {
@@ -256,7 +272,9 @@ class GlassesService : Service() {
 
     // ---- listening ----------------------------------------------------------
 
-    fun startListening(fromWakeWord: Boolean = false) {
+    fun startListening(fromWakeWord: Boolean = false) = guard("starting to listen") { listenNow(fromWakeWord) }
+
+    private fun listenNow(fromWakeWord: Boolean) {
         if (busy) return
         if (!micReady) {
             goForeground()
@@ -274,7 +292,7 @@ class GlassesService : Service() {
         quietGestures()
         target.pause()
         setStatus("Listening…")
-        voice.listen { result ->
+        voice.listen { result -> guard("handling what was heard") {
             when (result) {
                 // A false "Jarvis" shouldn't nag you, so wake-word misses stay quiet.
                 is GlassesVoice.Result.Failed -> say(if (fromWakeWord) "" else result.reason) {
@@ -289,17 +307,39 @@ class GlassesService : Service() {
                     execute(command, target, wasPlaying)
                 }
             }
-        }
+        } }
     }
 
     /** Run a typed command (used by the test box in the app). */
-    fun runText(text: String) {
-        if (busy) return
+    fun runText(text: String) = guard("running a typed command") {
+        if (busy) return@guard
         busy = true
         val target = currentTarget()
         val wasPlaying = target.playing
         quietGestures()
         execute(CommandParser.parse(text), target, wasPlaying, pauseFirst = true)
+    }
+
+    /**
+     * Runs a step of a command. Callbacks (after speech, searches, contacts…)
+     * run later on their own, so each goes through here: an unexpected error
+     * is recorded for the crash report and the app keeps running.
+     */
+    private fun guard(where: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (e: Throwable) {
+            Log.e(TAG, "error in $where", e)
+            CrashReport.recordProblem(this, where, e)
+            val wasBusy = busy
+            busy = false
+            try {
+                setStatus("Something went wrong ($where)")
+                if (wasBusy) speaker.say("Sorry, something went wrong") {}
+            } catch (ignored: Throwable) {
+            }
+            scheduleJarvisUpdate(2000)
+        }
     }
 
     private fun finished(newStatus: String) {
@@ -324,7 +364,9 @@ class GlassesService : Service() {
                         finished("Playing")
                     }
                     // Nothing open yet: have Samsung Music pick up where it left off.
-                    useSamsung() -> samsung.play { ok -> if (ok) finished("Samsung Music") else shuffleAll() }
+                    useSamsung() -> samsung.play { ok ->
+                        guard("Samsung Music play") { if (ok) finished("Samsung Music") else shuffleAll() }
+                    }
                     else -> shuffleAll()
                 }
             }
@@ -412,7 +454,9 @@ class GlassesService : Service() {
     private fun ask(question: String, onAnswer: (String?) -> Unit) {
         say(question) {
             setStatus("Listening…")
-            voice.listen { result -> onAnswer((result as? GlassesVoice.Result.Heard)?.phrases?.firstOrNull()) }
+            voice.listen { result ->
+                guard("handling an answer") { onAnswer((result as? GlassesVoice.Result.Heard)?.phrases?.firstOrNull()) }
+            }
         }
     }
 
@@ -434,8 +478,13 @@ class GlassesService : Service() {
             return
         }
         io.execute {
-            val list = phone.contacts()
-            main.post { block(list) }
+            val list = try {
+                phone.contacts()
+            } catch (e: RuntimeException) {
+                CrashReport.recordProblem(this, "reading contacts", e)
+                emptyList()
+            }
+            main.post { guard("using contacts") { block(list) } }
         }
     }
 
@@ -471,7 +520,6 @@ class GlassesService : Service() {
     // ---- sending messages ---------------------------------------------------
 
     private fun sendMessage(command: Command.SendMessage, done: () -> Unit) {
-        if (command.app == MessageApp.SMS && !phone.canText) return end("Allow text messages in the Glasses Tunes app first", done)
         if (command.app == MessageApp.WHATSAPP && !phone.hasWhatsApp()) return end("WhatsApp isn't installed", done)
         withContacts { contacts ->
             val (contact, message) = when {
@@ -494,6 +542,17 @@ class GlassesService : Service() {
         val message = ContactMatcher.sentence(raw)
         when (app) {
             MessageApp.SMS -> {
+                // If Google Messages (or Samsung Messages) has this conversation open in a
+                // notification, answer there: that keeps RCS chat instead of falling back to SMS.
+                val conversation = MessageInbox.latest(contact.name, needsReply = true)
+                    ?.takeIf { it.packageName in TEXTING_APPS }
+                if (conversation != null) {
+                    confirm("Text ${contact.name}: $message. Send it?", done) {
+                        end(if (MessageInbox.reply(this, conversation, message)) "Sent" else "The text didn't send", done)
+                    }
+                    return
+                }
+                if (!phone.canText) return end("Allow text messages in the Glasses Tunes app first", done)
                 val number = ContactMatcher.pickNumber(contact, "mobile")
                     ?: return end("${contact.name} doesn't have a phone number", done)
                 confirm("Text ${contact.name}: $message. Send it?", done) {
@@ -518,7 +577,7 @@ class GlassesService : Service() {
             ?: return end("I opened the chat. Turn on screen control in the app so I can press send for you.", done)
         var tries = 0
         val press = object : Runnable {
-            override fun run() {
+            override fun run() = guard("pressing WhatsApp send") {
                 when {
                     screen.pressWhatsAppSend() -> end("Sent", done)
                     ++tries < 12 -> main.postDelayed(this, 500)
@@ -579,8 +638,8 @@ class GlassesService : Service() {
     }
 
     /** Called for each new message notification. */
-    fun onNewMessage(entry: InboxEntry) {
-        if (!Prefs.announceMessages(this) || busy) return
+    fun onNewMessage(entry: InboxEntry) = guard("announcing a message") {
+        if (!Prefs.announceMessages(this) || busy) return@guard
         MessageInbox.markRead(entry)
         lastHeardMessage = entry
         say("${entry.sender} on ${entry.appLabel}: ${entry.text}") { setStatus("Ready") }
@@ -638,11 +697,13 @@ class GlassesService : Service() {
         if (useSamsung()) {
             say("Playing $spoken") {
                 samsung.playFromSearch(request) { ok ->
-                    if (ok) {
-                        lastUsedLocal = false
-                        finished("Samsung Music: $spoken")
-                    } else {
-                        playLocal(notFound)
+                    guard("Samsung Music search") {
+                        if (ok) {
+                            lastUsedLocal = false
+                            finished("Samsung Music: $spoken")
+                        } else {
+                            playLocal(notFound)
+                        }
                     }
                 }
             }
@@ -650,11 +711,13 @@ class GlassesService : Service() {
             playLocal {
                 if (samsung.isInstalled()) {
                     samsung.playFromSearch(request) { ok ->
-                        if (ok) {
-                            lastUsedLocal = false
-                            finished("Samsung Music: $spoken")
-                        } else {
-                            notFound()
+                        guard("Samsung Music search") {
+                            if (ok) {
+                                lastUsedLocal = false
+                                finished("Samsung Music: $spoken")
+                            } else {
+                                notFound()
+                            }
                         }
                     }
                 } else {
@@ -678,11 +741,13 @@ class GlassesService : Service() {
         }
         if (useSamsung()) {
             samsung.shuffleAll { ok ->
-                if (ok) {
-                    lastUsedLocal = false
-                    finished("Samsung Music: shuffle all")
-                } else {
-                    localShuffle()
+                guard("Samsung Music shuffle") {
+                    if (ok) {
+                        lastUsedLocal = false
+                        finished("Samsung Music: shuffle all")
+                    } else {
+                        localShuffle()
+                    }
                 }
             }
         } else {
@@ -701,7 +766,8 @@ class GlassesService : Service() {
             return
         }
         setStatus(text)
-        if (Prefs.speakReplies(this)) speaker.say(text, then) else then()
+        val next = { guard("after saying \"${text.take(30)}\"", then) }
+        if (Prefs.speakReplies(this)) speaker.say(text, next) else next()
     }
 
     // ---- what "pause / next / resume" talks to ------------------------------
@@ -755,24 +821,44 @@ class GlassesService : Service() {
         onStatus?.invoke(text)
     }
 
-    private fun goForeground() {
+    /**
+     * Returns false if Android won't let us run in the foreground at all. That
+     * happens when Android restarts the service by itself in the background
+     * (e.g. after Samsung's battery saver stopped it): Android 12+ refuses, and
+     * we must stop instead of crashing.
+     */
+    private fun goForeground(): Boolean {
         createChannel(this)
         val notification = buildNotification()
         if (Build.VERSION.SDK_INT < 30) {
-            startForeground(NOTIFICATION_ID, notification)
-            micReady = true
-            return
+            return try {
+                startForeground(NOTIFICATION_ID, notification)
+                micReady = true
+                true
+            } catch (e: RuntimeException) {
+                false
+            }
         }
-        micReady = try {
+        try {
             startForeground(
                 NOTIFICATION_ID, notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
             )
-            true
+            micReady = true
+            return true
         } catch (e: SecurityException) {
             // Android 14+: started from the background, so no mic until the user taps something of ours.
             Log.w(TAG, "microphone not allowed yet", e)
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "not allowed to run in the foreground", e)
+            return micReady // already in the foreground from an earlier call
+        }
+        micReady = false
+        return try {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+            true
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "not allowed to run in the foreground", e)
             false
         }
     }
@@ -796,6 +882,7 @@ class GlassesService : Service() {
     companion object {
         private const val TAG = "GlassesService"
         const val CHANNEL = "connector"
+        private val TEXTING_APPS = setOf("com.google.android.apps.messaging", "com.samsung.android.messaging")
         private const val NOTIFICATION_ID = 1
         private const val LOCAL_KEY = "local"
         const val ACTION_LISTEN = "com.knightdx.glassestunes.LISTEN"
@@ -814,7 +901,14 @@ class GlassesService : Service() {
         }
 
         fun start(context: Context) {
-            context.startForegroundService(Intent(context, GlassesService::class.java))
+            try {
+                context.startForegroundService(Intent(context, GlassesService::class.java))
+            } catch (e: RuntimeException) {
+                // e.g. ForegroundServiceStartNotAllowedException if Android thinks we're in the background.
+                Log.w(TAG, "couldn't start the connector", e)
+                CrashReport.recordProblem(context, "starting the connector", e)
+                AutoStart.promptRestart(context)
+            }
         }
     }
 }

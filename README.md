@@ -83,8 +83,11 @@ Things you can say:
 - **You can't hang up by voice.** During a call, Android doesn't let other
   apps hear the microphone, so Jarvis pauses. Tap the glasses to hang up
   instead.
-- Texts go out from your default SIM and show up in Samsung Messages like any
-  other text.
+- **Google Messages users:** if there's an unread Google Messages notification
+  from the person you're texting, the app sends through Google Messages
+  itself (its reply button), so RCS chat, typing indicators and read receipts
+  keep working. Otherwise the text goes out as a normal SMS from your default
+  SIM and shows up in the same conversation in Google Messages.
 
 ## The "Jarvis" wake word
 
@@ -168,6 +171,15 @@ The checklist at the top of the app shows what's working. There's also a
   **Use Samsung Music**. The built-in player then plays the same files straight
   from your phone's storage, and the glasses' tap controls still work.
 
+## If something goes wrong
+
+If the app crashes, open it again. A red panel at the top shows what happened.
+Tap **Share crash report** and send it over. The report includes Android's
+own record of the crash, including crashes in native code and "app not
+responding" freezes. If a single command fails, the app says "Sorry,
+something went wrong", keeps running, and records the error for that same
+report.
+
 ## Limits
 
 - **Not "Hey Meta."** The glasses handle that wake word themselves and start
@@ -208,5 +220,6 @@ The checklist at the top of the app shows what's working. There's also a
 | `JarvisWakeWord.kt` | always-on "Jarvis" listener (Vosk, offline) |
 | `JarvisDetector.kt` | wake-word grammar and acceptance rule (unit tested) |
 | `tools/jarvis_eval.py` | measures detection and false triggers on synthetic speech |
+| `tools/device_check/` | runs the parser/matchers on a real Android runtime (`run.sh`), catching Android-only bugs unit tests miss |
 
 Run the tests with `./gradlew testDebugUnitTest`.

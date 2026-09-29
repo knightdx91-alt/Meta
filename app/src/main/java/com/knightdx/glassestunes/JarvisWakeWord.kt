@@ -12,7 +12,6 @@ import android.util.Log
 import org.vosk.Model
 import org.vosk.Recognizer
 import org.vosk.android.StorageService
-import java.io.IOException
 
 /**
  * Listens continuously for "Jarvis" with Vosk, an open-source offline speech
@@ -33,22 +32,28 @@ class JarvisWakeWord(
     @Volatile
     private var running = false
 
+    /** Bumped on every start/stop so an old listener thread knows to quit. */
+    @Volatile
+    private var generation = 0
+
     val isRunning get() = running
 
     /** Start listening on [mic] (the glasses), or the default mic if null. */
     fun start(mic: AudioDeviceInfo?): Boolean {
         if (running) return true
+        val gen = ++generation
         running = true
-        thread = Thread({ loop(mic) }, "jarvis-wake-word").apply { start() }
+        thread = Thread({ loop(mic, gen) }, "jarvis-wake-word").apply { start() }
         return true
     }
 
-    /** Stop and wait for the mic to be released, so speech recognition can use it. */
-    fun stop() {
+    /** Stop; with [wait], block until the mic is released so speech recognition can use it. */
+    fun stop(wait: Boolean = true) {
         running = false
+        generation++
         val t = thread ?: return
         thread = null
-        if (t !== Thread.currentThread()) t.join(1500)
+        if (wait && t !== Thread.currentThread()) t.join(600)
     }
 
     fun release() {
@@ -63,11 +68,18 @@ class JarvisWakeWord(
     }
 
     @SuppressLint("MissingPermission") // the service only runs once RECORD_AUDIO is granted
-    private fun loop(mic: AudioDeviceInfo?) {
+    private fun loop(mic: AudioDeviceInfo?, gen: Int) {
+        fun active() = running && gen == generation
         val recognizer = try {
             Recognizer(loadModel(), SAMPLE_RATE.toFloat(), JarvisDetector.GRAMMAR).apply { setWords(true) }
-        } catch (e: IOException) {
-            fail("Jarvis couldn't load its speech model", e)
+        } catch (e: Throwable) {
+            // IOException, or the native speech library failing to load on this phone.
+            if (!active()) return
+            fail("Jarvis couldn't load its speech model: ${e.message}", e)
+            return
+        }
+        if (!active()) {
+            recognizer.close() // stopped while the model was loading
             return
         }
         val minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
@@ -95,19 +107,19 @@ class JarvisWakeWord(
         try {
             record.startRecording()
             Log.i(TAG, "listening for Jarvis on ${mic?.productName ?: "phone mic"}")
-            while (running) {
+            while (active()) {
                 val n = record.read(frame, 0, frame.size)
                 if (n < 0) throw IllegalStateException("AudioRecord.read error $n")
                 if (n == 0 || !recognizer.acceptWaveForm(frame, n)) continue
                 val result = recognizer.result
-                if (JarvisDetector.isWake(result)) {
+                if (JarvisDetector.isWake(result) && active()) {
                     Log.i(TAG, "Jarvis! $result")
                     running = false
                     main.post(onWake)
                 }
             }
-        } catch (e: Exception) {
-            fail("Jarvis stopped listening: ${e.message}", e)
+        } catch (e: Throwable) {
+            if (active()) fail("Jarvis stopped listening: ${e.message}", e)
         } finally {
             try {
                 record.stop()

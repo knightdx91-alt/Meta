@@ -169,6 +169,8 @@ class MainActivity : Activity() {
         column.addView(text(getString(R.string.app_name), 24f))
         column.addView(text("Voice control for Samsung Music and the music on your phone, through your Ray-Ban Meta glasses."))
 
+        CrashReport.report(this)?.let { report -> column.addView(crashPanel(report, pad)) }
+
         checklist = text("")
         column.addView(checklist)
 
@@ -260,6 +262,42 @@ class MainActivity : Activity() {
         })
 
         return ScrollView(this).apply { addView(column) }
+    }
+
+    private fun crashPanel(report: String, pad: Int): View {
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad / 2, pad / 2, pad / 2, pad / 2)
+            setBackgroundColor(0x33FF5252)
+        }
+        panel.addView(TextView(this).apply {
+            text = "⚠️ Glasses Tunes crashed recently. Tap Share and send the report so it can be fixed."
+            textSize = 15f
+        })
+        panel.addView(TextView(this).apply {
+            text = report.lines().take(12).joinToString("\n")
+            textSize = 11f
+            setTextIsSelectable(true)
+            setPadding(0, pad / 2, 0, pad / 2)
+        })
+        panel.addView(Button(this).apply {
+            text = "Share crash report"
+            setOnClickListener {
+                val send = Intent(Intent.ACTION_SEND)
+                    .setType("text/plain")
+                    .putExtra(Intent.EXTRA_SUBJECT, "Glasses Tunes crash report")
+                    .putExtra(Intent.EXTRA_TEXT, report)
+                startActivity(Intent.createChooser(send, "Share crash report"))
+            }
+        })
+        panel.addView(Button(this).apply {
+            text = "Dismiss"
+            setOnClickListener {
+                CrashReport.clear(this@MainActivity)
+                panel.visibility = View.GONE
+            }
+        })
+        return panel
     }
 
     companion object {

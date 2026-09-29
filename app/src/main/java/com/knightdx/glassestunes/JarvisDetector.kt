@@ -27,7 +27,8 @@ object JarvisDetector {
 
     private val wakeUtterances = setOf("jarvis", "hey jarvis", "hi jarvis", "okay jarvis", "hello jarvis", "jervis", "hey jervis")
     private val textField = Regex("\"text\"\\s*:\\s*\"([^\"]*)\"")
-    private val wordEntry = Regex("\\{[^{}]*\"word\"\\s*:\\s*\"([^\"]*)\"[^{}]*}")
+    // Braces and brackets are escaped everywhere: Android's regex engine (ICU) is stricter than the JVM's.
+    private val wordEntry = Regex("\\{[^\\{\\}]*\"word\"\\s*:\\s*\"([^\"]*)\"[^\\{\\}]*\\}")
     private val confField = Regex("\"conf\"\\s*:\\s*([0-9.eE+-]+)")
 
     /** [json] is a Vosk final result with words enabled. */
