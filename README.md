@@ -47,6 +47,44 @@ Things you can say:
 | "what's playing" | reads out the song and artist |
 | "open Maps" / "launch WhatsApp" / "start camera" | opens that app |
 | "talk to Gemini" / "hey Google" / "Gemini Live" | opens your phone's assistant (Gemini) listening |
+| "call Mom" / "call John on mobile" / "call 555 123 4567" | places the call |
+| "answer" / "decline" | answers or declines a ringing call |
+| "text Mom I'm on my way" / "tell John that dinner's ready" | SMS, read back to you first |
+| "WhatsApp John see you soon" / "message Mom on WhatsApp saying hi" | new WhatsApp message, read back to you first |
+| "read my messages" / "what did Sarah say" | reads new messages from any app aloud |
+| "reply sounds good" / "reply to John on my way" | replies in the app the message came from |
+| "tap Send" / "scroll down" / "type hello" / "go home" / "press back" | controls whatever is on screen |
+
+## Calls, messages and controlling other apps
+
+| | Screen off & locked? | Needs |
+|---|---|---|
+| Calls, answer/decline | ✅ | Contacts + Phone permissions |
+| Texts (SMS) | ✅ | Contacts + SMS permissions |
+| Read & reply to messages from **any** app (WhatsApp, Messenger, Telegram, Signal, Samsung Messages, Instagram…) | ✅ | Notification access |
+| New WhatsApp message (not a reply) | ❌ unlock first | Contacts + Screen control |
+| Tap / scroll / type / home / back in any app | ❌ unlock first | Screen control |
+
+- **Nothing is sent without your OK.** The app reads every text, WhatsApp
+  message and reply back to you ("Text Mom: I'm on my way. Send it?") and
+  only sends after a "yes" or "send it". Calls go straight through when the
+  name clearly matches a contact; otherwise it asks "Call John Smith?" first.
+- **Replies use the reply button in the app's own notification**, the same
+  way Android Auto and smartwatches do. That's why they work in any messaging
+  app, even while the phone is locked. Turn on **Read new messages aloud as
+  they arrive** to hear messages as they come in, then say "Jarvis, reply…".
+- **New WhatsApp chats**: WhatsApp has no API for sending, so the app opens
+  the chat with your message typed in and uses screen control to press Send.
+  The phone has to be unlocked for that to work.
+- **Screen control** is an Android accessibility service that you turn on
+  yourself. It finds on-screen buttons by their name, so "tap Send" or "tap
+  Settings" works in most apps. Games, and apps whose buttons have no labels,
+  won't respond. Some banking apps block accessibility services entirely.
+- **You can't hang up by voice.** During a call, Android doesn't let other
+  apps hear the microphone, so Jarvis pauses. Tap the glasses to hang up
+  instead.
+- Texts go out from your default SIM and show up in Samsung Messages like any
+  other text.
 
 ## The "Jarvis" wake word
 
@@ -101,12 +139,21 @@ Jarvis") through the glasses' microphone.
 3. Open **Glasses Tunes**:
    - **1 · Grant permissions & start connector** asks for the microphone,
      music-file, notification and Nearby devices (to notice the glasses)
-     permissions.
-   - **2 · Allow media control access** opens *Notification access*. Turn on
+     permissions. It also asks for Contacts, Phone and SMS access, which are
+     only needed for calls and texts.
+   - **2 · Allow notification access** opens *Notification access*. Turn on
      Glasses Tunes. Android requires this before an app can control Samsung
-     Music's playback. The app doesn't read your notifications.
+     Music's playback, and it's also how the app reads and replies to your
+     messages. Messages are only kept in memory on the phone and never leave
+     it.
    - **3 · Allow display over other apps** lets the app auto-start when the
      glasses connect and open apps hands-free.
+   - **4 · Turn on screen control (optional)** opens Accessibility settings.
+     Find Glasses Tunes under *Installed apps* and turn it on.
+   - **"Restricted setting"?** Android blocks notification access and
+     accessibility for any app installed outside the Play Store until you
+     allow them. Go to Settings → Apps → Glasses Tunes → ⋮ (top right) →
+     **Allow restricted settings**, then repeat steps 2 and 4.
 4. Make sure the glasses are connected to the phone over Bluetooth and set as
    the audio device, the same way they are for calls.
 
@@ -133,6 +180,9 @@ The checklist at the top of the app shows what's working. There's also a
   data connection unless offline speech is installed.
 - If a double-tap on your glasses is set to skip tracks, leave a short beat
   between the two taps.
+- Google Play Protect may warn you about a sideloaded app that can send
+  texts and use accessibility. That's expected for this kind of app. You can
+  review everything it does in this repo.
 - Voice search inside Samsung Music depends on its Android Auto media service.
   If Samsung blocks it on your firmware, the app falls back to the built-in
   player.
@@ -151,6 +201,10 @@ The checklist at the top of the app shows what's working. There's also a
 | `TalkTileService.kt` | Quick Settings tile |
 | `AppLauncher.kt` | "open <app>" and "talk to Gemini" |
 | `GlassesConnection.kt` | auto start/stop when the glasses connect or disconnect |
+| `PhoneActions.kt` | contacts, calls, SMS, opening WhatsApp chats |
+| `ContactMatcher.kt` | picks the contact and splits "mom I'm late" into name + message (unit tested) |
+| `MediaNotificationListener.kt` | Samsung Music control, plus the message inbox for reading and replying |
+| `ScreenControlService.kt` | accessibility service: tap, scroll, type, back/home, WhatsApp Send |
 | `JarvisWakeWord.kt` | always-on "Jarvis" listener (Vosk, offline) |
 | `JarvisDetector.kt` | wake-word grammar and acceptance rule (unit tested) |
 | `tools/jarvis_eval.py` | measures detection and false triggers on synthetic speech |

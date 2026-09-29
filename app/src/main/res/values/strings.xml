@@ -5,4 +5,5 @@
     <string name="talk">🎤 Talk</string>
     <string name="stop">Stop</string>
     <string name="talk_tile">Talk to music</string>
+    <string name="screen_control_description">Lets you control apps by voice through your glasses: say "Jarvis, tap Send", "scroll down", "go home", or "type hello". It only acts when you give a command and doesn\'t record or collect anything.</string>
 </resources>

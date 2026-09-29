@@ -24,8 +24,35 @@ sealed class Command {
     /** Open the phone's assistant (Gemini, if it's set as default). */
     object Assistant : Command()
     data class OpenApp(val name: String) : Command()
+
+    // ---- phone & messages ----
+    /** "call mom", "call john on mobile", "call 555 1234". */
+    data class Call(val who: String, val numberKind: String? = null) : Command()
+    object AnswerCall : Command()
+    object DeclineCall : Command()
+    /**
+     * "text mom I'm on my way". The name/message boundary depends on your
+     * contacts, so [recipientAndMessage] is split later; [message] is set when
+     * the phrase made it explicit ("text mom saying ...").
+     */
+    data class SendMessage(val app: MessageApp, val recipientAndMessage: String, val message: String? = null) : Command()
+    /** "reply sounds good" (message only), or "reply to john sounds good" (recipient first). */
+    data class Reply(val recipientAndMessage: String? = null, val message: String? = null) : Command()
+    data class ReadMessages(val from: String? = null) : Command()
+
+    // ---- controlling the screen (needs the accessibility service) ----
+    object UiBack : Command()
+    object UiHome : Command()
+    object UiNotifications : Command()
+    object UiRecents : Command()
+    data class UiScroll(val down: Boolean) : Command()
+    data class UiTap(val label: String) : Command()
+    data class UiType(val text: String) : Command()
+
     data class Unknown(val heard: String) : Command()
 }
+
+enum class MessageApp { SMS, WHATSAPP }
 
 /**
  * Turns a spoken phrase ("play the album thriller", "skip", "shuffle some queen")
@@ -40,7 +67,7 @@ object CommandParser {
     )
 
     private val pauseWords = setOf("pause", "stop", "pause music", "stop music", "pause the music", "stop the music", "hold on", "quiet", "shut up")
-    private val resumeWords = setOf("play", "resume", "continue", "unpause", "play music", "resume music", "keep playing", "go", "start", "start music", "play it")
+    private val resumeWords = setOf("play", "resume", "continue", "unpause", "play music", "resume music", "keep playing", "go", "start", "start music", "play it", "press play", "hit play")
     private val nextWords = setOf("next", "skip", "next song", "next track", "skip song", "skip this", "skip it", "skip track", "skip this song", "next one")
     private val prevWords = setOf("previous", "back", "go back", "last song", "previous song", "previous track", "replay", "play that again", "restart song", "back one")
     private val volUpWords = setOf("volume up", "louder", "turn it up", "turn up", "turn the volume up", "increase volume", "raise volume", "turn up the volume")
@@ -59,9 +86,31 @@ object CommandParser {
         "open google assistant", "open the assistant",
     )
 
+    private val answerWords = setOf("answer", "answer it", "answer the call", "answer the phone", "answer call", "pick up", "pick it up", "accept", "accept the call", "accept call")
+    private val declineWords = setOf("decline", "decline it", "decline the call", "decline call", "reject", "reject the call", "reject call", "ignore", "ignore it", "ignore the call", "ignore call", "send to voicemail")
+    private val homeWords = setOf("go home", "home screen", "go to the home screen", "go to home screen", "show home screen", "press home", "home button")
+    private val backWords = setOf("press back", "back button", "go back a screen", "previous screen", "hit back", "tap back")
+    private val notificationWords = setOf("notifications", "show notifications", "open notifications", "show my notifications", "open the notifications", "pull down notifications", "notification shade")
+    private val recentsWords = setOf("recent apps", "recents", "show recent apps", "open recent apps", "show recents", "app switcher")
+    private val readWords = setOf(
+        "read my messages", "read messages", "read my texts", "read texts", "read my new messages", "read new messages",
+        "any messages", "any new messages", "do i have any messages", "do i have any new messages", "do i have messages",
+        "read the message", "read the last message", "read my last message", "read last message", "what did they say",
+        "read it", "check my messages", "check messages",
+    )
+    private val yesWords = setOf(
+        "yes", "yeah", "yep", "yup", "sure", "send", "send it", "ok", "okay", "do it", "go ahead", "correct", "confirm",
+        "yes please", "yes send it", "yeah send it", "that's right", "thats right", "right", "affirmative", "call", "call them",
+    )
+
+    /** For confirmations ("Send it?"). */
+    fun isYes(raw: String): Boolean = normalizeLight(raw).removeSuffix(" please").trim() in yesWords
+
     fun parse(raw: String): Command {
         val text = normalize(raw)
         if (text.isEmpty()) return Command.Unknown(raw)
+        // Messages keep their trailing words ("... I'll be there now").
+        val light = normalizeLight(raw)
 
         when (text) {
             in pauseWords -> return Command.Pause
@@ -73,7 +122,20 @@ object CommandParser {
             in whatWords -> return Command.WhatsPlaying
             in shuffleAllWords -> return Command.ShuffleAll
             in assistantWords -> return Command.Assistant
+            in answerWords -> return Command.AnswerCall
+            in declineWords -> return Command.DeclineCall
+            in homeWords -> return Command.UiHome
+            in backWords -> return Command.UiBack
+            in notificationWords -> return Command.UiNotifications
+            in recentsWords -> return Command.UiRecents
+            in readWords -> return Command.ReadMessages()
+            "scroll down", "page down", "scroll" -> return Command.UiScroll(down = true)
+            "scroll up", "page up" -> return Command.UiScroll(down = false)
+            "reply", "reply to it", "reply to that", "respond" -> return Command.Reply()
         }
+
+        parseMessaging(light)?.let { return it }
+        parseCall(text)?.let { return it }
 
         val shuffleMatch = Regex("^(shuffle|play shuffled|shuffle play)\\s+(.+)$").find(text)
         if (shuffleMatch != null) {
@@ -96,6 +158,86 @@ object CommandParser {
 
         return Command.Unknown(raw)
     }
+
+    private fun parseCall(text: String): Command? {
+        val kinds = "mobile|cell|cellphone|cell phone|work|office|home|house"
+        Regex("^(?:call|phone|dial|ring|make a call to|place a call to|facetime)\\s+(.+?)(?:\\s+(?:on|at)\\s+(?:(?:his|her|their|the|my)\\s+)?($kinds)(?:\\s+(?:number|phone))?)?$")
+            .find(text)?.let { return Command.Call(it.groupValues[1].trim(), kindOf(it.groupValues[2])) }
+        Regex("^give\\s+(.+?)\\s+a\\s+(?:call|ring)$").find(text)?.let { return Command.Call(it.groupValues[1].trim()) }
+        return null
+    }
+
+    private fun kindOf(spoken: String): String? = when (spoken) {
+        "" -> null
+        "cell", "cellphone", "cell phone" -> "mobile"
+        "office" -> "work"
+        "house" -> "home"
+        else -> spoken
+    }
+
+    private fun parseMessaging(light: String): Command? {
+        // Screen control with free text.
+        Regex("^(?:tap|click|press|select|touch|hit)\\s+(?:on\\s+)?(?:the\\s+)?(.+?)(?:\\s+button)?$").find(light)?.let {
+            return Command.UiTap(it.groupValues[1])
+        }
+        Regex("^(?:type|write|enter)\\s+(.+)$").find(light)?.let { return Command.UiType(it.groupValues[1]) }
+
+        // Reading.
+        Regex("^(?:read|what did|what's|whats)\\s+(?:my\\s+)?(?:messages?|texts?)\\s+from\\s+(.+)$").find(light)?.let {
+            return Command.ReadMessages(it.groupValues[1])
+        }
+        Regex("^what did\\s+(.+?)\\s+(?:say|send|text|write)(?:\\s+me)?$").find(light)?.let { return Command.ReadMessages(it.groupValues[1]) }
+        Regex("^read\\s+(.+?)'s\\s+(?:messages?|texts?)$").find(light)?.let { return Command.ReadMessages(it.groupValues[1]) }
+
+        // Replying to the last message.
+        Regex("^(?:reply|respond|answer)\\s+(to\\s+)?(.+)$").find(light)?.let {
+            return if (it.groupValues[1].isNotEmpty()) {
+                val (recipientAndMessage, message) = splitExplicit(it.groupValues[2])
+                Command.Reply(recipientAndMessage = recipientAndMessage, message = message)
+            } else {
+                Command.Reply(message = stripSaying(it.groupValues[2]))
+            }
+        }
+
+        // New messages.
+        var app = MessageApp.SMS
+        var t = light
+        // "... on WhatsApp" right after the name, or at the very end.
+        Regex("\\s+(?:on|via|over|through|using|in)\\s+whatsapp(?=$|\\s+(?:saying|that|to say|and say|with)\\s)").find(t)?.let {
+            app = MessageApp.WHATSAPP
+            t = t.removeRange(it.range).trim()
+        }
+        val verbs = "text|message|sms|whatsapp|send a text to|send a message to|send a text message to|send an sms to|" +
+            "send a whatsapp to|send a whatsapp message to|send whatsapp to|send message to|send text to|tell|let"
+        val m = Regex("^($verbs)\\s+(.+)$").find(t)
+            ?: Regex("^send\\s+(.+?)\\s+an?\\s+(text|message|whatsapp|whatsapp message|text message)(?:\\s+(.+))?$").find(t)?.let { sm ->
+                val kind = sm.groupValues[2]
+                if (kind.startsWith("whatsapp")) app = MessageApp.WHATSAPP
+                val (who, msg) = sm.groupValues[1] to sm.groupValues[3].ifBlank { null }?.let { stripSaying(it) }
+                return Command.SendMessage(app, who, msg)
+            }
+            ?: return null
+        val verb = m.groupValues[1]
+        if (verb.contains("whatsapp")) app = MessageApp.WHATSAPP
+        var rest = m.groupValues[2]
+        if (verb == "let") {
+            // "let mom know I'm on my way"
+            val know = Regex("^(.+?)\\s+know\\s+(?:that\\s+)?(.+)$").find(rest) ?: return null
+            return Command.SendMessage(app, know.groupValues[1], know.groupValues[2])
+        }
+        val (recipientAndMessage, message) = splitExplicit(rest)
+        rest = recipientAndMessage
+        return Command.SendMessage(app, rest, message)
+    }
+
+    /** "mom saying hi" -> ("mom", "hi"); "mom hi" -> ("mom hi", null) to be split using contacts. */
+    private fun splitExplicit(s: String): Pair<String, String?> {
+        val sep = Regex("\\s+(?:saying|that says|that|to say|and say|and tell (?:him|her|them)|with the message|with)\\s+").find(s)
+            ?: return s to null
+        return s.substring(0, sep.range.first).trim() to s.substring(sep.range.last + 1).trim()
+    }
+
+    private fun stripSaying(s: String) = s.replace(Regex("^(?:saying|that|with)\\s+"), "").trim()
 
     private fun stripSome(s: String) = s.replace(Regex("^(some|a little|a bit of|a few songs by|a few|more)\\s+"), "").trim()
 
@@ -130,6 +272,17 @@ object CommandParser {
     }
 
     private fun clean(s: String) = s.trim().removeSuffix(" songs").removeSuffix(" music").trim()
+
+    /** Lowercase, drop punctuation and leading filler, but keep every word of a message. */
+    fun normalizeLight(raw: String): String {
+        var t = raw.lowercase()
+            .replace('’', '\'')
+            .replace(Regex("[^a-z0-9' &+]+"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        repeat(3) { t = t.replace(leadingFiller, "").trim() }
+        return t
+    }
 
     fun normalize(raw: String): String {
         var t = raw.lowercase()

@@ -58,9 +58,20 @@ class MainActivity : Activity() {
         if (missingPermissions().isEmpty()) startConnector()
     }
 
+    /** Nice to have: glasses detection, calls, texts. The connector runs without them. */
+    private fun optionalPermissions(): List<String> {
+        val wanted = mutableListOf(
+            Manifest.permission.READ_CONTACTS,
+            Manifest.permission.CALL_PHONE,
+            Manifest.permission.ANSWER_PHONE_CALLS,
+            Manifest.permission.SEND_SMS,
+        )
+        if (Build.VERSION.SDK_INT >= 31) wanted += Manifest.permission.BLUETOOTH_CONNECT
+        return wanted.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+    }
+
     private fun missingPermissions(): List<String> {
         val wanted = mutableListOf(Manifest.permission.RECORD_AUDIO)
-        if (Build.VERSION.SDK_INT >= 31) wanted += Manifest.permission.BLUETOOTH_CONNECT
         if (Build.VERSION.SDK_INT >= 33) {
             wanted += Manifest.permission.POST_NOTIFICATIONS
             wanted += Manifest.permission.READ_MEDIA_AUDIO
@@ -70,16 +81,26 @@ class MainActivity : Activity() {
         return wanted.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
     }
 
+    private fun hasScreenControl(): Boolean {
+        val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false
+        val me = ComponentName(this, ScreenControlService::class.java)
+        return enabled.split(':').any { ComponentName.unflattenFromString(it) == me }
+    }
+
     private fun hasMediaAccess(): Boolean {
         val enabled = Settings.Secure.getString(contentResolver, "enabled_notification_listeners") ?: return false
         val me = ComponentName(this, MediaNotificationListener::class.java)
         return enabled.split(':').any { ComponentName.unflattenFromString(it) == me }
     }
 
+    private var askedOptional = false
+
     private fun startConnector() {
         val missing = missingPermissions()
-        if (missing.isNotEmpty()) {
-            requestPermissions(missing.toTypedArray(), 1)
+        val optional = if (askedOptional) emptyList() else optionalPermissions()
+        if (missing.isNotEmpty() || optional.isNotEmpty()) {
+            askedOptional = true
+            requestPermissions((missing + optional).toTypedArray(), 1)
             return
         }
         GlassesService.start(this)
@@ -102,7 +123,9 @@ class MainActivity : Activity() {
                 else "Glasses not connected over Bluetooth — music & mic will use the phone",
             ),
             line(missingPermissions().isEmpty(), "Microphone, music & notification permissions"),
-            line(hasMediaAccess(), "Media control access (lets taps & voice control Samsung Music)"),
+            line(optionalPermissions().isEmpty(), "Contacts, calls & texts (for \"call Mom\", \"text Mom…\")"),
+            line(hasMediaAccess(), "Notification access (Samsung Music control, reading & replying to messages)"),
+            line(hasScreenControl(), "Screen control (tap, scroll, type, WhatsApp send)"),
             line(
                 Settings.canDrawOverlays(this),
                 "Display over other apps (auto-start when glasses connect, open apps hands-free)",
@@ -150,13 +173,27 @@ class MainActivity : Activity() {
         column.addView(checklist)
 
         column.addView(button("1 · Grant permissions & start connector") { startConnector() })
-        column.addView(button("2 · Allow media control access") {
+        column.addView(button("2 · Allow notification access") {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
         })
         column.addView(button("3 · Allow display over other apps") {
             startActivity(
                 Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:$packageName"))
             )
+        })
+        column.addView(button("4 · Turn on screen control (optional)") {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        })
+        column.addView(
+            text(
+                "If Android says \"Restricted setting\" for steps 2 or 4: open Settings → Apps → Glasses Tunes → " +
+                    "⋮ (top right) → Allow restricted settings, then try again. Android does this for every app " +
+                    "installed outside the Play Store.",
+                13f,
+            )
+        )
+        column.addView(button("App info (for restricted settings)") {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName")))
         })
         column.addView(button("🎤 Talk now") {
             val s = GlassesService.instance
@@ -177,7 +214,10 @@ class MainActivity : Activity() {
                     "• Or use the \"Talk\" button in the notification or the Quick Settings tile.\n\n" +
                     "Try: \"play Bohemian Rhapsody by Queen\", \"play the album Thriller\", \"shuffle Drake\", " +
                     "\"play my workout playlist\", \"shuffle everything\", \"next\", \"previous\", \"pause\", " +
-                    "\"volume up\", \"what's playing\", \"open Maps\", \"talk to Gemini\"."
+                    "\"volume up\", \"what's playing\", \"open Maps\", \"talk to Gemini\".\n\n" +
+                    "Phone & messages: \"call Mom\", \"text Mom I'm on my way\", \"WhatsApp John see you soon\", " +
+                    "\"read my messages\", \"reply sounds good\", \"answer\".\n\n" +
+                    "Screen: \"tap Send\", \"scroll down\", \"type hello\", \"go home\", \"press back\"."
             )
         )
 
@@ -198,6 +238,7 @@ class MainActivity : Activity() {
         column.addView(toggle("Start automatically when glasses connect", Prefs.AUTO_START))
         column.addView(toggle("Use Samsung Music (off = built-in player for phone files)", Prefs.PREFER_SAMSUNG))
         column.addView(toggle("Speak replies in the glasses", Prefs.SPEAK_REPLIES))
+        column.addView(toggle("Read new messages aloud as they arrive", Prefs.ANNOUNCE_MESSAGES))
 
         column.addView(text("Try a command without speaking", 18f))
         val input = EditText(this).apply {

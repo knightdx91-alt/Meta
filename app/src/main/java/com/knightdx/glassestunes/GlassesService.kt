@@ -40,6 +40,9 @@ class GlassesService : Service() {
     private lateinit var local: LocalPlayer
     private lateinit var speaker: Speaker
     private lateinit var launcher: AppLauncher
+    private lateinit var phone: PhoneActions
+    /** The message last read aloud, so "reply" answers it. */
+    private var lastHeardMessage: InboxEntry? = null
     private lateinit var jarvis: JarvisWakeWord
     private var jarvisError: String? = null
     private var jarvisRetryAt = 0L
@@ -65,6 +68,7 @@ class GlassesService : Service() {
         override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) = scheduleJarvisUpdate(300)
     }
     private val jarvisUpdate = Runnable { updateJarvis() }
+    private val modeListener = AudioManager.OnModeChangedListener { scheduleJarvisUpdate(300) }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -75,8 +79,13 @@ class GlassesService : Service() {
         samsung = SamsungMusic(this)
         speaker = Speaker(this)
         launcher = AppLauncher(this)
+        phone = PhoneActions(this)
         jarvis = JarvisWakeWord(this, onWake = ::onJarvis, onError = ::onJarvisError)
         getSystemService(AudioManager::class.java).registerAudioDeviceCallback(deviceCallback, main)
+        if (Build.VERSION.SDK_INT >= 31) {
+            // Step aside for phone and WhatsApp calls, which need the glasses' mic themselves.
+            getSystemService(AudioManager::class.java).addOnModeChangedListener(mainExecutor, modeListener)
+        }
         local = LocalPlayer(this) { playing -> onPlayback(LOCAL_KEY, playing) }
         sessionManager = getSystemService(MediaSessionManager::class.java)
         goForeground()
@@ -109,6 +118,9 @@ class GlassesService : Service() {
         watched.clear()
         main.removeCallbacks(jarvisUpdate)
         getSystemService(AudioManager::class.java).unregisterAudioDeviceCallback(deviceCallback)
+        if (Build.VERSION.SDK_INT >= 31) {
+            getSystemService(AudioManager::class.java).removeOnModeChangedListener(modeListener)
+        }
         jarvis.release()
         voice.cancel()
         voice.releaseGlassesMic()
@@ -146,6 +158,7 @@ class GlassesService : Service() {
             jarvisError != null -> jarvisError!!
             jarvis.isRunning -> "Listening for \"Jarvis\""
             !voice.glassesMicConnected() -> "Jarvis waits for your glasses to connect"
+            inCall() -> "Jarvis is paused during calls"
             Prefs.jarvisOnlyWhenIdle(this) && anythingPlaying() -> "Jarvis is paused while music plays"
             !micReady -> "Tap Talk in the notification once to turn on the mic"
             else -> "Jarvis is starting…"
@@ -156,6 +169,14 @@ class GlassesService : Service() {
         main.postDelayed(jarvisUpdate, delayMs)
     }
 
+    /** A phone or internet call is using the audio (ringing is fine, so "Jarvis, answer" works). */
+    private fun inCall(): Boolean {
+        if (Build.VERSION.SDK_INT < 31) return false // older Androids: our own voice link uses this mode
+        val mode = getSystemService(AudioManager::class.java).mode
+        return mode == AudioManager.MODE_IN_CALL || mode == AudioManager.MODE_IN_COMMUNICATION ||
+            mode == AudioManager.MODE_CALL_SCREENING
+    }
+
     private fun anythingPlaying(): Boolean = local.isPlaying ||
         samsung.activeControllers().any { it.packageName != packageName && it.playbackState?.state == PlaybackState.STATE_PLAYING }
 
@@ -163,7 +184,7 @@ class GlassesService : Service() {
     private fun updateJarvis() {
         if (busy) return // resumes from finished()
         val want = Prefs.jarvis(this) && micReady && voice.glassesMicConnected() &&
-            !(Prefs.jarvisOnlyWhenIdle(this) && anythingPlaying()) &&
+            !(Prefs.jarvisOnlyWhenIdle(this) && anythingPlaying()) && !inCall() &&
             SystemClock.elapsedRealtime() >= jarvisRetryAt
         if (want && !jarvis.isRunning) {
             val mic = voice.holdGlassesMic() ?: return
@@ -364,11 +385,233 @@ class GlassesService : Service() {
                     }
                 }
             }
+            is Command.Call -> placeCall(command, resumeIfNeeded)
+            Command.AnswerCall -> {
+                if (!phone.answer()) say("Allow phone permissions in the Glasses Tunes app so I can answer calls") {}
+                finished("Answered")
+            }
+            Command.DeclineCall -> {
+                if (!phone.decline()) say("Allow phone permissions in the Glasses Tunes app so I can decline calls") {}
+                finished("Declined")
+            }
+            is Command.SendMessage -> sendMessage(command, resumeIfNeeded)
+            is Command.Reply -> reply(command, resumeIfNeeded)
+            is Command.ReadMessages -> readMessages(command, resumeIfNeeded)
+            Command.UiBack, Command.UiHome, Command.UiNotifications, Command.UiRecents,
+            is Command.UiScroll, is Command.UiTap, is Command.UiType -> controlScreen(command, resumeIfNeeded)
             is Command.Unknown -> say("Sorry, I heard: ${command.heard}. Try saying play, then a song, artist, or album.") {
                 resumeIfNeeded()
                 finished("Didn't understand \"${command.heard}\"")
             }
         }
+    }
+
+    // ---- conversations ------------------------------------------------------
+
+    /** Ask a question and listen for the answer (null if nothing was heard). */
+    private fun ask(question: String, onAnswer: (String?) -> Unit) {
+        say(question) {
+            setStatus("Listening…")
+            voice.listen { result -> onAnswer((result as? GlassesVoice.Result.Heard)?.phrases?.firstOrNull()) }
+        }
+    }
+
+    /** Anything that sends on your behalf is read back first and needs a "yes". */
+    private fun confirm(question: String, done: () -> Unit, onYes: () -> Unit) {
+        ask(question) { answer ->
+            if (answer != null && CommandParser.isYes(answer)) onYes() else say("Cancelled") { done(); finished("Cancelled") }
+        }
+    }
+
+    private fun end(message: String, done: () -> Unit) = say(message) {
+        done()
+        finished(message)
+    }
+
+    private fun withContacts(block: (List<Contact>) -> Unit) {
+        if (!phone.canReadContacts) {
+            end("Allow contacts in the Glasses Tunes app first") {}
+            return
+        }
+        io.execute {
+            val list = phone.contacts()
+            main.post { block(list) }
+        }
+    }
+
+    // ---- calls ----------------------------------------------------------------
+
+    private fun placeCall(command: Command.Call, done: () -> Unit) {
+        if (!phone.canCall) return end("Allow phone calls in the Glasses Tunes app first", done)
+        ContactMatcher.asPhoneNumber(command.who)?.let { number ->
+            say("Calling ${number.toList().joinToString(" ")}") {
+                phone.call(number)
+                finished("Calling $number")
+            }
+            return
+        }
+        withContacts { contacts ->
+            val contact = ContactMatcher.find(contacts, command.who)
+                ?: return@withContacts end("I couldn't find ${command.who} in your contacts", done)
+            val number = ContactMatcher.pickNumber(contact, command.numberKind)
+                ?: return@withContacts end("${contact.name} doesn't have a phone number", done)
+            val which = if (contact.phones.size > 1) " on ${number.kind}" else ""
+            val call = {
+                say("Calling ${contact.name}$which") {
+                    if (phone.call(number.number)) finished("Calling ${contact.name}")
+                    else end("I couldn't place the call", done)
+                }
+            }
+            // Ask first only when the name was a loose match.
+            if (ContactMatcher.confidence(contact, command.who) >= 85) call()
+            else confirm("Call ${contact.name}$which?", done) { call() }
+        }
+    }
+
+    // ---- sending messages ---------------------------------------------------
+
+    private fun sendMessage(command: Command.SendMessage, done: () -> Unit) {
+        if (command.app == MessageApp.SMS && !phone.canText) return end("Allow text messages in the Glasses Tunes app first", done)
+        if (command.app == MessageApp.WHATSAPP && !phone.hasWhatsApp()) return end("WhatsApp isn't installed", done)
+        withContacts { contacts ->
+            val (contact, message) = when {
+                command.message != null -> ContactMatcher.find(contacts, command.recipientAndMessage) to command.message
+                else -> ContactMatcher.split(contacts, command.recipientAndMessage)
+                    ?: (ContactMatcher.find(contacts, command.recipientAndMessage) to null)
+            }
+            if (contact == null) return@withContacts end("I couldn't find that person in your contacts", done)
+            if (message.isNullOrBlank()) {
+                ask("What's the message for ${contact.name}?") { answer ->
+                    if (answer.isNullOrBlank()) end("Cancelled", done) else confirmAndSend(command.app, contact, answer, done)
+                }
+            } else {
+                confirmAndSend(command.app, contact, message, done)
+            }
+        }
+    }
+
+    private fun confirmAndSend(app: MessageApp, contact: Contact, raw: String, done: () -> Unit) {
+        val message = ContactMatcher.sentence(raw)
+        when (app) {
+            MessageApp.SMS -> {
+                val number = ContactMatcher.pickNumber(contact, "mobile")
+                    ?: return end("${contact.name} doesn't have a phone number", done)
+                confirm("Text ${contact.name}: $message. Send it?", done) {
+                    end(if (phone.sendSms(number.number, message)) "Sent" else "The text didn't send", done)
+                }
+            }
+            MessageApp.WHATSAPP -> {
+                val jid = contact.whatsappJid
+                    ?: return end("I can't find ${contact.name} on WhatsApp", done)
+                confirm("WhatsApp ${contact.name}: $message. Send it?", done) { sendWhatsApp(jid, message, done) }
+            }
+        }
+    }
+
+    /** WhatsApp has no sending API: open the chat with the text filled in and press Send. */
+    private fun sendWhatsApp(jid: String, message: String, done: () -> Unit) {
+        if (launcher.isLocked()) {
+            return end("Unlock your phone to send a new WhatsApp message. Replies work while it's locked.", done)
+        }
+        phone.openWhatsAppChat(jid, message, launcher)
+        val screen = ScreenControlService.instance
+            ?: return end("I opened the chat. Turn on screen control in the app so I can press send for you.", done)
+        var tries = 0
+        val press = object : Runnable {
+            override fun run() {
+                when {
+                    screen.pressWhatsAppSend() -> end("Sent", done)
+                    ++tries < 12 -> main.postDelayed(this, 500)
+                    else -> end("I opened the chat but couldn't press send", done)
+                }
+            }
+        }
+        main.postDelayed(press, 1200)
+    }
+
+    // ---- incoming messages --------------------------------------------------
+
+    private fun reply(command: Command.Reply, done: () -> Unit) {
+        var message = command.message
+        val entry = when {
+            command.recipientAndMessage == null ->
+                lastHeardMessage?.takeIf { it.canReply && MessageInbox.all().any { e -> e.key == it.key } }
+                    ?: MessageInbox.latest(needsReply = true)
+            message != null -> MessageInbox.latest(command.recipientAndMessage, needsReply = true)
+            else -> {
+                val split = ContactMatcher.splitNames(MessageInbox.senders(), command.recipientAndMessage)
+                if (split != null) {
+                    message = split.second
+                    MessageInbox.latest(split.first, needsReply = true)
+                } else {
+                    MessageInbox.latest(command.recipientAndMessage, needsReply = true)
+                }
+            }
+        } ?: return end("I don't see a message I can reply to", done)
+        val send = { text: String ->
+            val reply = ContactMatcher.sentence(text)
+            confirm("Reply to ${entry.sender} on ${entry.appLabel}: $reply. Send it?", done) {
+                end(if (MessageInbox.reply(this, entry, reply)) "Sent" else "That message can't be replied to anymore", done)
+            }
+        }
+        if (message.isNullOrBlank()) {
+            ask("What's your reply to ${entry.sender}?") { answer ->
+                if (answer.isNullOrBlank()) end("Cancelled", done) else send(answer)
+            }
+        } else {
+            send(message)
+        }
+    }
+
+    private fun readMessages(command: Command.ReadMessages, done: () -> Unit) {
+        val messages = if (command.from != null) {
+            MessageInbox.all().filter { LibraryMatcher.score(it.sender, command.from) >= 70 }.takeLast(3)
+        } else {
+            MessageInbox.unread().takeLast(5)
+        }
+        if (messages.isEmpty()) {
+            return end(if (command.from != null) "No recent messages from ${command.from}" else "No new messages", done)
+        }
+        messages.forEach { MessageInbox.markRead(it) }
+        lastHeardMessage = messages.last()
+        val text = messages.joinToString(". ") { "${it.sender} on ${it.appLabel}: ${it.text}" }
+        end(text, done)
+    }
+
+    /** Called for each new message notification. */
+    fun onNewMessage(entry: InboxEntry) {
+        if (!Prefs.announceMessages(this) || busy) return
+        MessageInbox.markRead(entry)
+        lastHeardMessage = entry
+        say("${entry.sender} on ${entry.appLabel}: ${entry.text}") { setStatus("Ready") }
+    }
+
+    // ---- controlling the screen ---------------------------------------------
+
+    private fun controlScreen(command: Command, done: () -> Unit) {
+        val screen = ScreenControlService.instance
+            ?: return end("Turn on screen control for Glasses Tunes in the app first", done)
+        if (launcher.isLocked()) return end("Unlock your phone first", done)
+        when (command) {
+            Command.UiBack -> screen.back()
+            Command.UiHome -> screen.home()
+            Command.UiNotifications -> screen.notifications()
+            Command.UiRecents -> screen.recents()
+            is Command.UiScroll -> if (!screen.scroll(command.down)) return end("There's nothing to scroll", done)
+            is Command.UiTap -> {
+                val tapped = screen.tap(command.label)
+                    ?: return end("I couldn't find ${command.label} on the screen", done)
+                done()
+                finished("Tapped $tapped")
+                return
+            }
+            is Command.UiType -> if (!screen.type(ContactMatcher.sentence(command.text))) {
+                return end("There's no text box to type in", done)
+            }
+            else -> Unit
+        }
+        done()
+        finished("Done")
     }
 
     private fun useSamsung() = Prefs.preferSamsung(this) && samsung.isInstalled()

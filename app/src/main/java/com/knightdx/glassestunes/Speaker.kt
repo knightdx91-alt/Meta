@@ -52,8 +52,8 @@ class Speaker(context: Context) {
             then()
             return
         }
-        // Never get stuck if the engine forgets to call back.
-        main.postDelayed({ pending.remove(id)?.invoke() }, 8000)
+        // Never get stuck if the engine forgets to call back (long messages take longer).
+        main.postDelayed({ pending.remove(id)?.invoke() }, 8000L + text.length * 90L)
     }
 
     fun shutdown() {

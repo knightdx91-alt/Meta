@@ -9,6 +9,7 @@ object Prefs {
     const val AUTO_START = "auto_start"
     const val JARVIS = "jarvis"
     const val JARVIS_IDLE_ONLY = "jarvis_idle_only"
+    const val ANNOUNCE_MESSAGES = "announce_messages"
 
     private fun prefs(c: Context) = c.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
@@ -18,7 +19,8 @@ object Prefs {
     fun autoStart(c: Context) = prefs(c).getBoolean(AUTO_START, true)
     fun jarvis(c: Context) = prefs(c).getBoolean(JARVIS, true)
     fun jarvisOnlyWhenIdle(c: Context) = prefs(c).getBoolean(JARVIS_IDLE_ONLY, false)
+    fun announceMessages(c: Context) = prefs(c).getBoolean(ANNOUNCE_MESSAGES, false)
 
-    fun get(c: Context, key: String) = prefs(c).getBoolean(key, key != JARVIS_IDLE_ONLY)
+    fun get(c: Context, key: String) = prefs(c).getBoolean(key, key != JARVIS_IDLE_ONLY && key != ANNOUNCE_MESSAGES)
     fun set(c: Context, key: String, value: Boolean) = prefs(c).edit().putBoolean(key, value).apply()
 }

@@ -57,6 +57,8 @@ class AppLauncher(private val context: Context) {
         return start(gemini, "Gemini")
     }
 
+    fun startIntent(intent: Intent, label: String): Boolean = start(intent, label)
+
     private fun start(intent: Intent, label: String): Boolean {
         if (!canOpenFromBackground()) {
             offerTap(intent, label)
