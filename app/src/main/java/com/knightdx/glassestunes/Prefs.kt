@@ -21,6 +21,13 @@ object Prefs {
     fun jarvisOnlyWhenIdle(c: Context) = prefs(c).getBoolean(JARVIS_IDLE_ONLY, false)
     fun announceMessages(c: Context) = prefs(c).getBoolean(ANNOUNCE_MESSAGES, false)
 
+    fun geminiKey(c: Context): String = prefs(c).getString("gemini_key", "").orEmpty()
+    fun setGeminiKey(c: Context, key: String) = prefs(c).edit().putString("gemini_key", key.trim()).remove("gemini_route").apply()
+    fun geminiRoute(c: Context): String = prefs(c).getString("gemini_route", "").orEmpty()
+    fun setGeminiRoute(c: Context, route: String) = prefs(c).edit().putString("gemini_route", route).apply()
+    fun homeCity(c: Context): String = prefs(c).getString("home_city", "").orEmpty()
+    fun setHomeCity(c: Context, city: String) = prefs(c).edit().putString("home_city", city.trim()).apply()
+
     fun get(c: Context, key: String) = prefs(c).getBoolean(key, key != JARVIS_IDLE_ONLY && key != ANNOUNCE_MESSAGES)
     fun set(c: Context, key: String, value: Boolean) = prefs(c).edit().putBoolean(key, value).apply()
 }

@@ -114,3 +114,27 @@ class ContactMatcherTest {
         assertEquals("I'm on my way", ContactMatcher.sentence("i'm on my way"))
     }
 }
+
+class AskTest {
+    @Test fun explicitQuestions() {
+        assertEquals(Command.Ask("who won the lakers game"), CommandParser.parse("Google who won the Lakers game"))
+        assertEquals(Command.Ask("how tall is the eiffel tower"), CommandParser.parse("look up how tall is the Eiffel Tower"))
+        assertEquals(Command.Ask("the weather tomorrow"), CommandParser.parse("search for the weather tomorrow"))
+        // Still opens the Gemini app.
+        assertEquals(Command.Assistant, CommandParser.parse("ask Gemini"))
+    }
+
+    @Test fun plainQuestionsFallThroughToAsk() {
+        // The service sends Unknown to Gemini when a key is set.
+        assertTrue(CommandParser.parse("how long do I boil an egg") is Command.Unknown)
+        // ...but commands still win.
+        assertEquals(Command.WhatsPlaying, CommandParser.parse("what's playing"))
+    }
+
+    @Test fun spokenAnswersAreCleaned() {
+        assertEquals("The Lakers won 112 to 104.", SpokenText.clean("**The Lakers** won 112 to 104 [1]."))
+        assertEquals("See this.", SpokenText.clean("See this https://example.com ."))
+        val long = "First sentence here is long enough to count as a real sentence for trimming. " + "Word ".repeat(200)
+        assertEquals("First sentence here is long enough to count as a real sentence for trimming.", SpokenText.clean(long))
+    }
+}

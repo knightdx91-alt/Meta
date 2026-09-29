@@ -54,6 +54,44 @@ Things you can say:
 | "read my messages" / "what did Sarah say" | reads new messages from any app aloud |
 | "reply sounds good" / "reply to John on my way" | replies in the app the message came from |
 | "tap Send" / "scroll down" / "type hello" / "go home" / "press back" | controls whatever is on screen |
+| "who won the Lakers game?" / "google how tall is Everest" / anything else | asks Gemini (with Google Search) and speaks the answer |
+
+## Finding your songs
+
+You don't have to say song names exactly. The app matches what you say against
+the songs on your phone and allows for how speech recognition writes things:
+"mister Brightside" finds "Mr. Brightside", "Beyonce" finds "Beyoncé", "guns
+and roses" finds "Guns N' Roses", and small mishearings ("rapsody") still
+match. "by" or "from" both work: "play Halo by Beyoncé", "play Halo from
+Beyoncé", or just "play Halo".
+
+The app first finds the song in your phone's music library (the same one
+Samsung Music uses), then asks Samsung Music to play that exact song. Samsung
+Music often ignores requests from other apps, so if it doesn't start within a
+few seconds, the app plays the song itself. The glasses' tap controls work
+either way. If it says it can't see your music, allow **Music and audio**
+access for Glasses Tunes (Settings → Apps → Glasses Tunes → Permissions).
+
+## Asking questions
+
+Say "Jarvis", then ask anything. Anything that isn't a music, phone or app
+command is treated as a question, or you can start with "google…", "look
+up…" or "search for…". The answer comes from Google's **Gemini** with
+**Google Search** and is read out in one to three sentences. Follow-ups
+work for a few minutes ("…and who's he married to?").
+
+Setup: in the app, tap **Get a free Gemini key**, sign in with Google, tap
+**Create API key**, copy it into the app and tap **Save Gemini key**. You can
+also set your city for weather and "near me" questions.
+
+- Your questions go to Google. On Google's free tier, Google may use them to
+  improve its products.
+- On the free tier, only the Gemini 2.5 models include Google Search (up to
+  500 searches a day). Google may restrict those older models for new keys.
+  The app tries 2.5 Flash with Search, then Gemini 3.8 Flash with Search
+  (paid keys only), then Gemini 3.8 Flash without live search. It remembers
+  whichever works. Without Search, answers about news, scores and weather can
+  be out of date.
 
 ## Calls, messages and controlling other apps
 
@@ -219,6 +257,7 @@ report.
 | `ScreenControlService.kt` | accessibility service: tap, scroll, type, back/home, WhatsApp Send |
 | `JarvisWakeWord.kt` | always-on "Jarvis" listener (Vosk, offline) |
 | `JarvisDetector.kt` | wake-word grammar and acceptance rule (unit tested) |
+| `AskAssistant.kt` | questions → Gemini with Google Search, answers cleaned up for speaking |
 | `tools/jarvis_eval.py` | measures detection and false triggers on synthetic speech |
 | `tools/device_check/` | runs the parser/matchers on a real Android runtime (`run.sh`), catching Android-only bugs unit tests miss |
 

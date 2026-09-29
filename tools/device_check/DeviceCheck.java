@@ -22,6 +22,8 @@ public class DeviceCheck {
             "read my messages", "what did Sarah say", "read messages from John", "read John's messages",
             "tap the Send button", "click on settings", "scroll down", "type hello there", "go home", "press back",
             "press play", "can you play some Beyonce on Samsung Music", "random nonsense words",
+            "google who won the lakers game", "look up how tall is the Eiffel Tower", "play mister brightside from the killers",
+            "play sweet child of mine by guns and roses", "how long do I boil an egg",
         };
         for (String p : phrases) run("parse \"" + p + "\"", () -> System.out.println("       -> " + CommandParser.INSTANCE.parse(p)));
         run("isYes", () -> CommandParser.INSTANCE.isYes("Yeah, send it."));
@@ -41,6 +43,14 @@ public class DeviceCheck {
             boolean yes = JarvisDetector.INSTANCE.isWake("{\n  \"result\" : [{\n \"conf\" : 0.93,\n \"end\" : 1.2,\n \"start\" : 0.6,\n \"word\" : \"jarvis\"\n }],\n  \"text\" : \"jarvis\"\n}", 0.5);
             if (!yes) throw new AssertionError("should wake");
         });
+        run("fuzzy song match", () -> {
+            List<Track> songs = Arrays.asList(new Track(9, "Mr. Brightside - 2004 Remaster", "The Killers", "Hot Fuss", 2, ""),
+                new Track(10, "Halo", "Beyoncé", "I Am", 2, ""));
+            Selection s1 = LibraryMatcher.INSTANCE.select(songs, new PlayRequest("mister brightside", Focus.SONG, "the killers", false), kotlin.random.Random.Default);
+            Selection s2 = LibraryMatcher.INSTANCE.select(songs, new PlayRequest("halo", Focus.SONG, "beyonce", false), kotlin.random.Random.Default);
+            if (s1 == null || s1.getTracks().get(0).getId() != 9 || s2 == null || s2.getTracks().get(0).getId() != 10) throw new AssertionError(s1 + " / " + s2);
+        });
+        run("spoken answer cleanup", () -> System.out.println("       -> " + SpokenText.INSTANCE.clean("**The Lakers** won [1]. See https://x.y", 450)));
         run("glasses names", () -> GlassesNames.INSTANCE.isGlasses("Ray-Ban Meta 04B2"));
         System.out.println(failures == 0 ? "ALL PASSED" : failures + " FAILED");
     }

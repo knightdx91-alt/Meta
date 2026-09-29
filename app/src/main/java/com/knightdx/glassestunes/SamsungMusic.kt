@@ -80,6 +80,70 @@ class SamsungMusic(private val context: Context) {
         }
     }
 
+    /**
+     * Ask Samsung Music to play one song we already found in the phone's
+     * library, by its file (if Samsung accepts that) or by its exact title and
+     * artist from the tags. Only reports success if that song is what's playing.
+     */
+    fun playTrack(track: Track, done: (Boolean) -> Unit) {
+        val uri = android.content.ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, track.id)
+        val request = PlayRequest(track.title, Focus.SONG, artist = track.artist)
+        val ask = { c: MediaController ->
+            if (supports(c, PlaybackState.ACTION_PLAY_FROM_URI)) {
+                c.transportControls.playFromUri(uri, Bundle())
+            } else {
+                c.transportControls.playFromSearch("${track.title} ${track.artist}", searchExtras(request))
+            }
+        }
+        val existing = samsungController()
+        if (existing != null) {
+            ask(existing)
+            verifySong(existing, track, done)
+            return
+        }
+        withBrowser { controller, disconnect ->
+            if (controller == null) {
+                done(false)
+                return@withBrowser
+            }
+            ask(controller)
+            verifySong(controller, track) { ok ->
+                disconnect()
+                done(ok)
+            }
+        }
+    }
+
+    private fun verifySong(controller: MediaController, track: Track, done: (Boolean) -> Unit) {
+        fun right(): Boolean {
+            val title = controller.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: return false
+            return controller.playbackState?.state == PlaybackState.STATE_PLAYING &&
+                LibraryMatcher.score(title, track.title) >= 85
+        }
+        var answered = false
+        val callback = object : MediaController.Callback() {
+            override fun onPlaybackStateChanged(state: PlaybackState?) = check()
+            override fun onMetadataChanged(metadata: MediaMetadata?) = check()
+            fun check() {
+                if (!answered && right()) {
+                    answered = true
+                    controller.unregisterCallback(this)
+                    done(true)
+                }
+            }
+        }
+        controller.registerCallback(callback, main)
+        main.postDelayed({
+            if (!answered) {
+                answered = true
+                controller.unregisterCallback(callback)
+                val ok = right()
+                if (!ok) Log.i(TAG, "Samsung Music didn't take \"${track.title}\"; using the built-in player")
+                done(ok)
+            }
+        }, 3000)
+    }
+
     /** Start Samsung Music playing even if it isn't running yet ("play music"). */
     fun play(done: (Boolean) -> Unit) {
         val existing = samsungController()

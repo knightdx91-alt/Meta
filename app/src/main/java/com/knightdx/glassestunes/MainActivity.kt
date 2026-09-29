@@ -131,6 +131,10 @@ class MainActivity : Activity() {
                 "Display over other apps (auto-start when glasses connect, open apps hands-free)",
             ),
             line(samsung.isInstalled(), if (samsung.isInstalled()) "Samsung Music installed" else "Samsung Music not found — built-in player will be used"),
+            line(
+                Prefs.geminiKey(this).isNotBlank(),
+                if (Prefs.geminiKey(this).isNotBlank()) "Questions: Gemini key added" else "Questions: add a Gemini key below",
+            ),
             line(service != null, if (service != null) "Connector running · ${service.librarySize} songs on phone" else "Connector stopped"),
             line(
                 service?.jarvisStatus == "Listening for \"Jarvis\"",
@@ -234,6 +238,43 @@ class MainActivity : Activity() {
         column.addView(
             toggle("Pause Jarvis while music plays (keeps music in full quality)", Prefs.JARVIS_IDLE_ONLY)
         )
+
+        column.addView(text("Ask questions", 18f))
+        column.addView(
+            text(
+                "Say \"Jarvis\", then ask anything (\"who won the Lakers game?\", \"how long do I boil an egg?\"), " +
+                    "or say \"google…\" / \"look up…\". Answers come from Google's Gemini with Google Search and are " +
+                    "spoken in your glasses. Needs a free Gemini API key: tap below, sign in with Google, " +
+                    "tap \"Create API key\", copy it and paste it here. Your questions are sent to Google; on the free " +
+                    "tier Google may use them to improve its products."
+            )
+        )
+        val geminiInput = EditText(this).apply {
+            hint = "Gemini API key"
+            setText(Prefs.geminiKey(this@MainActivity))
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+            isSingleLine = true
+        }
+        column.addView(geminiInput)
+        column.addView(button("Save Gemini key") {
+            Prefs.setGeminiKey(this, geminiInput.text.toString())
+            statusView.text = "Gemini key saved. Try: \"Jarvis\" … \"what's the capital of Australia?\""
+            updateChecklist()
+        })
+        column.addView(button("Get a free Gemini key") {
+            startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://aistudio.google.com/apikey")))
+        })
+        val cityInput = EditText(this).apply {
+            hint = "Your city (optional, for weather and \"near me\")"
+            setText(Prefs.homeCity(this@MainActivity))
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+            isSingleLine = true
+        }
+        column.addView(cityInput)
+        column.addView(button("Save city") {
+            Prefs.setHomeCity(this, cityInput.text.toString())
+            statusView.text = "City saved"
+        })
 
         column.addView(text("Settings", 18f))
         column.addView(toggle("Tap-tap on glasses to talk", Prefs.TAP_GESTURE))

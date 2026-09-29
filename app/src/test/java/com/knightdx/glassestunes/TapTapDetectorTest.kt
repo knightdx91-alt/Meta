@@ -33,3 +33,27 @@ class TapTapDetectorTest {
         assertFalse(d.onPlaybackChanged(true, 1500))
     }
 }
+
+class TapTapNotSongChangesTest {
+    @Test fun songChangeFlickerIsIgnored() {
+        val d = TapTapDetector()
+        d.onPlaybackChanged(true, 0, "song A")
+        d.onPlaybackChanged(false, 10_000, "song A")
+        // Next song starts 80 ms later: too quick to be a person tapping twice.
+        assertFalse(d.onPlaybackChanged(true, 10_080, "song B"))
+    }
+
+    @Test fun differentSongIsIgnoredEvenIfSlow() {
+        val d = TapTapDetector()
+        d.onPlaybackChanged(true, 0, "song A")
+        d.onPlaybackChanged(false, 10_000, "song A")
+        assertFalse(d.onPlaybackChanged(true, 10_600, "song B"))
+    }
+
+    @Test fun realDoubleTapOnSameSongFires() {
+        val d = TapTapDetector()
+        d.onPlaybackChanged(true, 0, "song A")
+        d.onPlaybackChanged(false, 10_000, "song A")
+        assertTrue(d.onPlaybackChanged(true, 10_600, "song A"))
+    }
+}

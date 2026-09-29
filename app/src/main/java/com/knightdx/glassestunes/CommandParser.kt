@@ -49,6 +49,9 @@ sealed class Command {
     data class UiTap(val label: String) : Command()
     data class UiType(val text: String) : Command()
 
+    /** A question for Gemini ("google who won the game", or anything that isn't a command). */
+    data class Ask(val question: String) : Command()
+
     data class Unknown(val heard: String) : Command()
 }
 
@@ -132,6 +135,10 @@ object CommandParser {
             "scroll down", "page down", "scroll" -> return Command.UiScroll(down = true)
             "scroll up", "page up" -> return Command.UiScroll(down = false)
             "reply", "reply to it", "reply to that", "respond" -> return Command.Reply()
+        }
+
+        Regex("^(?:google|search for|search|look up|ask google|ask jarvis|ask)\\s+(.+)$").find(light)?.let {
+            return Command.Ask(it.groupValues[1])
         }
 
         parseMessaging(light)?.let { return it }
@@ -265,7 +272,7 @@ object CommandParser {
         val song = Regex("^(the )?(song|track)\\s+(.+)$").find(t)
         val isSong = song != null
         if (song != null) t = song.groupValues[3]
-        Regex("^(.+?)\\s+by\\s+(.+)$").find(t)?.let {
+        Regex("^(.+?)\\s+(?:by|from)\\s+(.+)$").find(t)?.let {
             return PlayRequest(clean(it.groupValues[1]), Focus.SONG, artist = clean(it.groupValues[2]))
         }
         return PlayRequest(clean(t), if (isSong) Focus.SONG else Focus.ANY)

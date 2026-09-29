@@ -55,7 +55,12 @@ object LocalLibrary {
  * Samsung Music can't take a voice search. It publishes a media session, so
  * tapping the glasses' temple still pauses/plays/skips it.
  */
-class LocalPlayer(private val context: Context, private val onStateChanged: (playing: Boolean) -> Unit) {
+class LocalPlayer(
+    private val context: Context,
+    private val onStateChanged: (playing: Boolean) -> Unit,
+    /** Play/pause pressed on the glasses (or any Bluetooth/notification control), not by us. */
+    private val onUserToggle: (playing: Boolean) -> Unit = {},
+) {
 
     private val audio = context.getSystemService(AudioManager::class.java)
     private val attributes = AudioAttributes.Builder()
@@ -75,11 +80,21 @@ class LocalPlayer(private val context: Context, private val onStateChanged: (pla
     private var index = 0
     private var player: MediaPlayer? = null
     private var prepared = false
+    /** A track is being opened; reported as "buffering", never as "paused". */
+    private var loading = false
 
     val session = MediaSession(context, "GlassesTunes").apply {
         setCallback(object : MediaSession.Callback() {
-            override fun onPlay() = resume()
-            override fun onPause() = pause()
+            override fun onPlay() {
+                resume()
+                onUserToggle(true)
+            }
+
+            override fun onPause() {
+                pause()
+                onUserToggle(false)
+            }
+
             override fun onStop() = pause()
             override fun onSkipToNext() = next()
             override fun onSkipToPrevious() = previous()
@@ -87,7 +102,12 @@ class LocalPlayer(private val context: Context, private val onStateChanged: (pla
     }
 
     val hasQueue get() = queue.isNotEmpty()
-    val isPlaying get() = player?.isPlaying == true
+    val isPlaying: Boolean
+        get() = try {
+            prepared && player?.isPlaying == true
+        } catch (e: IllegalStateException) {
+            false // player in its error state
+        }
     val current: Track? get() = queue.getOrNull(index)
 
     fun play(tracks: List<Track>) {
@@ -145,19 +165,24 @@ class LocalPlayer(private val context: Context, private val onStateChanged: (pla
         if (!requestFocus()) return
         player?.release()
         prepared = false
+        loading = true
         val uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, track.id)
+        Log.i(TAG, "playing \"${track.title}\" by ${track.artist}")
         player = MediaPlayer().apply {
             setAudioAttributes(attributes)
             setWakeMode(context, PowerManager.PARTIAL_WAKE_LOCK)
             setOnPreparedListener {
                 prepared = true
+                loading = false
                 it.start()
                 publish()
             }
             setOnCompletionListener { next() }
             setOnErrorListener { _, what, extra ->
                 Log.w(TAG, "playback error $what/$extra on ${track.title}")
-                if (queue.size > 1) next()
+                loading = false
+                prepared = false
+                if (queue.size > 1) next() else publish()
                 true
             }
             try {
@@ -165,6 +190,7 @@ class LocalPlayer(private val context: Context, private val onStateChanged: (pla
                 prepareAsync()
             } catch (e: Exception) {
                 Log.w(TAG, "cannot open ${track.title}", e)
+                loading = false
             }
         }
         session.isActive = true
@@ -190,13 +216,17 @@ class LocalPlayer(private val context: Context, private val onStateChanged: (pla
                         PlaybackState.ACTION_SKIP_TO_NEXT or PlaybackState.ACTION_SKIP_TO_PREVIOUS or PlaybackState.ACTION_STOP
                 )
                 .setState(
-                    if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
+                    when {
+                        playing -> PlaybackState.STATE_PLAYING
+                        loading -> PlaybackState.STATE_BUFFERING
+                        else -> PlaybackState.STATE_PAUSED
+                    },
                     if (prepared) player?.currentPosition?.toLong() ?: 0L else 0L,
                     1f,
                 )
                 .build()
         )
-        onStateChanged(playing)
+        if (!loading) onStateChanged(playing)
     }
 
     companion object {

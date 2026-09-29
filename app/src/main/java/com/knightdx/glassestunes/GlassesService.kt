@@ -41,6 +41,10 @@ class GlassesService : Service() {
     private lateinit var speaker: Speaker
     private lateinit var launcher: AppLauncher
     private lateinit var phone: PhoneActions
+    private lateinit var assistant: AskAssistant
+    /** Recent questions and answers, so follow-ups like "who's he married to?" work. */
+    private val conversation = ArrayList<AskAssistant.Turn>()
+    private var lastQuestionAt = 0L
     /** The message last read aloud, so "reply" answers it. */
     private var lastHeardMessage: InboxEntry? = null
     private lateinit var jarvis: JarvisWakeWord
@@ -81,6 +85,7 @@ class GlassesService : Service() {
         speaker = Speaker(this)
         launcher = AppLauncher(this)
         phone = PhoneActions(this)
+        assistant = AskAssistant(this)
         jarvis = JarvisWakeWord(this, onWake = ::onJarvis, onError = ::onJarvisError)
         getSystemService(AudioManager::class.java).registerAudioDeviceCallback(deviceCallback, main)
         if (Build.VERSION.SDK_INT >= 31) {
@@ -89,7 +94,12 @@ class GlassesService : Service() {
             modeListener = listener
             getSystemService(AudioManager::class.java).addOnModeChangedListener(mainExecutor, listener)
         }
-        local = LocalPlayer(this) { playing -> onPlayback(LOCAL_KEY, playing) }
+        local = LocalPlayer(
+            this,
+            onStateChanged = { if (Prefs.jarvisOnlyWhenIdle(this)) scheduleJarvisUpdate(800) },
+            // Our own player tells us about real taps directly, so loading a song can't look like a tap.
+            onUserToggle = { playing -> onPlayback(LOCAL_KEY, playing, "local") },
+        )
         sessionManager = getSystemService(MediaSessionManager::class.java)
         if (!goForeground()) {
             AutoStart.promptRestart(this)
@@ -135,6 +145,7 @@ class GlassesService : Service() {
         voice.releaseGlassesMic()
         local.release()
         speaker.shutdown()
+        assistant.shutdown()
         io.shutdownNow()
         super.onDestroy()
     }
@@ -237,8 +248,8 @@ class GlassesService : Service() {
             val cb = object : MediaController.Callback() {
                 override fun onPlaybackStateChanged(state: PlaybackState?) {
                     when (state?.state) {
-                        PlaybackState.STATE_PLAYING -> onPlayback(key, true)
-                        PlaybackState.STATE_PAUSED, PlaybackState.STATE_STOPPED -> onPlayback(key, false)
+                        PlaybackState.STATE_PLAYING -> onPlayback(key, true, songOf(c))
+                        PlaybackState.STATE_PAUSED, PlaybackState.STATE_STOPPED -> onPlayback(key, false, songOf(c))
                     }
                 }
             }
@@ -249,16 +260,21 @@ class GlassesService : Service() {
         }
     }
 
-    private fun onPlayback(key: String, playing: Boolean) = guard("watching playback") { playbackChanged(key, playing) }
+    private fun onPlayback(key: String, playing: Boolean, song: String?) =
+        guard("watching playback") { playbackChanged(key, playing, song) }
 
-    private fun playbackChanged(key: String, playing: Boolean) {
+    private fun songOf(c: MediaController): String? = c.metadata?.let {
+        "${it.getString(android.media.MediaMetadata.METADATA_KEY_TITLE)}|${it.getString(android.media.MediaMetadata.METADATA_KEY_ARTIST)}"
+    }
+
+    private fun playbackChanged(key: String, playing: Boolean, song: String?) {
         val detector = detectors.getOrPut(key) { TapTapDetector() }
         val now = SystemClock.elapsedRealtime()
         if (busy || now < suppressGesturesUntil || !Prefs.tapGesture(this)) {
             detector.reset(playing)
             return
         }
-        if (detector.onPlaybackChanged(playing, now)) {
+        if (detector.onPlaybackChanged(playing, now, song)) {
             Log.i(TAG, "tap-tap on $key")
             startListening()
             return
@@ -441,9 +457,36 @@ class GlassesService : Service() {
             is Command.ReadMessages -> readMessages(command, resumeIfNeeded)
             Command.UiBack, Command.UiHome, Command.UiNotifications, Command.UiRecents,
             is Command.UiScroll, is Command.UiTap, is Command.UiType -> controlScreen(command, resumeIfNeeded)
-            is Command.Unknown -> say("Sorry, I heard: ${command.heard}. Try saying play, then a song, artist, or album.") {
-                resumeIfNeeded()
-                finished("Didn't understand \"${command.heard}\"")
+            is Command.Ask -> askQuestion(command.question, resumeIfNeeded)
+            // Anything that isn't a command is treated as a question, once Gemini is set up.
+            is Command.Unknown -> if (Prefs.geminiKey(this).isNotBlank()) {
+                askQuestion(command.heard, resumeIfNeeded)
+            } else {
+                say("Sorry, I heard: ${command.heard}. To ask questions, add a Gemini key in the Glasses Tunes app.") {
+                    resumeIfNeeded()
+                    finished("Didn't understand \"${command.heard}\"")
+                }
+            }
+        }
+    }
+
+    // ---- questions ------------------------------------------------------------
+
+    private fun askQuestion(question: String, done: () -> Unit) {
+        // Forget the conversation after a few quiet minutes.
+        if (SystemClock.elapsedRealtime() - lastQuestionAt > 5 * 60_000) conversation.clear()
+        setStatus("Thinking about \"$question\"…")
+        assistant.ask(question, conversation.toList()) { answer ->
+            guard("answering a question") {
+                lastQuestionAt = SystemClock.elapsedRealtime()
+                when (answer) {
+                    is AskAssistant.Answer.Spoken -> {
+                        conversation += AskAssistant.Turn(question, answer.text)
+                        while (conversation.size > 3) conversation.removeAt(0)
+                        end(answer.text, done)
+                    }
+                    is AskAssistant.Answer.Failed -> end(answer.reason, done)
+                }
             }
         }
     }
@@ -675,54 +718,86 @@ class GlassesService : Service() {
 
     private fun useSamsung() = Prefs.preferSamsung(this) && samsung.isInstalled()
 
+    /**
+     * Finds the song in the phone's own music library first: that's the same
+     * library Samsung Music plays, and our matching forgives mishearings.
+     * Samsung Music is then handed that exact song; if it won't take it (it
+     * often refuses requests from other apps), the built-in player plays it.
+     */
     private fun playRequest(request: PlayRequest, onNotFound: () -> Unit) {
         val spoken = request.query + (request.artist?.let { " by $it" } ?: "")
-        val playLocal: (() -> Unit) -> Unit = { orElse ->
-            val selection = LibraryMatcher.select(library, request)
-            if (selection != null) {
-                say("Playing ${selection.description}") {
+        withLibrary { songs ->
+            val selection = LibraryMatcher.select(songs, request)
+            if (selection == null) {
+                notInLibrary(request, spoken, songs.isEmpty(), onNotFound)
+                return@withLibrary
+            }
+            say("Playing ${selection.description}") {
+                if (!useSamsung()) {
                     playLocalSelection(selection)
                     finished("Playing ${selection.description}")
+                    return@say
                 }
-            } else {
-                orElse()
+                samsung.playTrack(selection.tracks.first()) { ok ->
+                    guard("Samsung Music") {
+                        if (ok) {
+                            lastUsedLocal = false
+                            finished("Samsung Music: ${selection.description}")
+                        } else {
+                            playLocalSelection(selection)
+                            finished("Playing ${selection.description}")
+                        }
+                    }
+                }
             }
         }
-        val notFound = {
-            say("I couldn't find $spoken") {
+    }
+
+    /** Not among the phone's songs. Samsung Music may still know it; otherwise say why it failed. */
+    private fun notInLibrary(request: PlayRequest, spoken: String, libraryEmpty: Boolean, onNotFound: () -> Unit) {
+        val giveUp = {
+            say(if (libraryEmpty) libraryProblem() else "I couldn't find $spoken in your music") {
                 onNotFound()
                 finished("Couldn't find \"$spoken\"")
             }
         }
-        if (useSamsung()) {
-            say("Playing $spoken") {
-                samsung.playFromSearch(request) { ok ->
-                    guard("Samsung Music search") {
-                        if (ok) {
-                            lastUsedLocal = false
-                            finished("Samsung Music: $spoken")
-                        } else {
-                            playLocal(notFound)
-                        }
-                    }
+        if (!useSamsung()) return giveUp()
+        samsung.playFromSearch(request) { ok ->
+            guard("Samsung Music search") {
+                if (ok) {
+                    lastUsedLocal = false
+                    finished("Samsung Music: $spoken")
+                } else {
+                    giveUp()
                 }
             }
+        }
+    }
+
+    /** Why the music library is empty, as something to say out loud. */
+    private fun libraryProblem(): String {
+        val permission = if (Build.VERSION.SDK_INT >= 33) android.Manifest.permission.READ_MEDIA_AUDIO
+        else android.Manifest.permission.READ_EXTERNAL_STORAGE
+        return if (checkSelfPermission(permission) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            "I can't see your music. Open Glasses Tunes and allow access to music and audio."
         } else {
-            playLocal {
-                if (samsung.isInstalled()) {
-                    samsung.playFromSearch(request) { ok ->
-                        guard("Samsung Music search") {
-                            if (ok) {
-                                lastUsedLocal = false
-                                finished("Samsung Music: $spoken")
-                            } else {
-                                notFound()
-                            }
-                        }
-                    }
-                } else {
-                    notFound()
-                }
+            "I didn't find any music files on your phone"
+        }
+    }
+
+    /** The phone's songs, reloading first if the list is empty (e.g. music access was just granted). */
+    private fun withLibrary(block: (List<Track>) -> Unit) {
+        if (library.isNotEmpty()) return block(library)
+        io.execute {
+            val songs = try {
+                LocalLibrary.load(this)
+            } catch (e: RuntimeException) {
+                CrashReport.recordProblem(this, "loading music library", e)
+                emptyList()
+            }
+            main.post {
+                library = songs
+                guard("using the music library") { block(songs) }
             }
         }
     }
@@ -736,7 +811,7 @@ class GlassesService : Service() {
                     finished("Shuffling all music")
                 }
             } else {
-                say("I couldn't find any music on your phone") { finished("No music found") }
+                say(libraryProblem()) { finished("No music found") }
             }
         }
         if (useSamsung()) {
@@ -758,6 +833,7 @@ class GlassesService : Service() {
     private fun playLocalSelection(selection: Selection) {
         lastUsedLocal = true
         local.play(selection.tracks)
+        detectors.getOrPut(LOCAL_KEY) { TapTapDetector() }.reset(true)
     }
 
     private fun say(text: String, then: () -> Unit) {
