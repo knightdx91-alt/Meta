@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Lets Glasses Tunes ask for a photo ("Jarvis, take a photo"). Signature level: only apps signed
+      with the same key may use it, so other apps can't trigger the glasses camera. Glasses Tunes
+      declares the same permission, so it works whichever app is installed first.
+    -->
+    <permission
+        android:name="com.knightdx.glassescamera.permission.TAKE_PHOTO"
+        android:protectionLevel="signature" />
+
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@drawable/ic_camera"
+        android:label="@string/app_name"
+        android:theme="@android:style/Theme.DeviceDefault.DayNight">
+
+        <!-- Meta Wearables Device Access Toolkit (empty = Developer Mode, no attestation). -->
+        <meta-data
+            android:name="com.meta.wearable.mwdat.APPLICATION_ID"
+            android:value="${mwdat_application_id}" />
+        <meta-data
+            android:name="com.meta.wearable.mwdat.CLIENT_TOKEN"
+            android:value="${mwdat_client_token}" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- The Meta AI app returns here after you connect. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="glassescamera" />
+            </intent-filter>
+        </activity>
+
+        <!-- "Take a photo" from the watch app. -->
+        <service
+            android:name=".WatchListener"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data
+                    android:host="*"
+                    android:pathPrefix="/glasses-tunes"
+                    android:scheme="wear" />
+            </intent-filter>
+        </service>
+
+        <!-- "Jarvis, take a photo" from Glasses Tunes. -->
+        <receiver
+            android:name=".PhotoRequestReceiver"
+            android:exported="true"
+            android:permission="com.knightdx.glassescamera.permission.TAKE_PHOTO">
+            <intent-filter>
+                <action android:name="com.knightdx.glassescamera.TAKE_PHOTO" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

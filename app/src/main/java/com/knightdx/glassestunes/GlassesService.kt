@@ -42,8 +42,6 @@ class GlassesService : Service() {
     private lateinit var launcher: AppLauncher
     private lateinit var phone: PhoneActions
     private lateinit var assistant: AskAssistant
-    lateinit var camera: GlassesCamera
-        private set
     /** Recent questions and answers, so follow-ups like "who's he married to?" work. */
     private val conversation = ArrayList<AskAssistant.Turn>()
     private var lastQuestionAt = 0L
@@ -88,7 +86,6 @@ class GlassesService : Service() {
         launcher = AppLauncher(this)
         phone = PhoneActions(this)
         assistant = AskAssistant(this)
-        camera = GlassesCamera(this)
         jarvis = JarvisWakeWord(this, onWake = ::onJarvis, onError = ::onJarvisError)
         getSystemService(AudioManager::class.java).registerAudioDeviceCallback(deviceCallback, main)
         if (Build.VERSION.SDK_INT >= 31) {
@@ -149,7 +146,6 @@ class GlassesService : Service() {
         local.release()
         speaker.shutdown()
         assistant.shutdown()
-        camera.shutdown()
         io.shutdownNow()
         super.onDestroy()
     }
@@ -466,9 +462,7 @@ class GlassesService : Service() {
             Command.UiBack, Command.UiHome, Command.UiNotifications, Command.UiRecents,
             is Command.UiScroll, is Command.UiTap, is Command.UiType -> controlScreen(command, resumeIfNeeded)
             is Command.Ask -> askQuestion(command.question, resumeIfNeeded)
-            Command.TakePhoto -> takePhoto(fromWatch = false) { message ->
-                end(message, resumeIfNeeded)
-            }
+            Command.TakePhoto -> takePhoto { message -> end(message, resumeIfNeeded) }
             // Anything that isn't a command is treated as a question, once Gemini is set up.
             is Command.Unknown -> if (Prefs.geminiKey(this).isNotBlank()) {
                 askQuestion(command.heard, resumeIfNeeded)
@@ -481,24 +475,50 @@ class GlassesService : Service() {
         }
     }
 
-    // ---- glasses camera ---------------------------------------------------------
+    // ---- glasses camera (the separate Glasses Camera app) ----------------------
 
     /**
-     * Takes a photo with the glasses and reports a short message ("Photo saved",
-     * or why not). From the watch it stays quiet: the watch shows the result.
+     * Asks the Glasses Camera app to take a photo and reports its short reply
+     * ("Photo saved", or why not). Glasses Camera only accepts the request from
+     * apps holding its signature permission, so only our own apps can trigger the camera.
      */
-    fun takePhoto(fromWatch: Boolean, report: (String) -> Unit) = guard("taking a photo") {
-        if (!fromWatch) setStatus("Taking a photo…")
-        camera.takePhoto { result ->
-            guard("saving a photo") {
-                val message = when (result) {
-                    is GlassesCamera.Result.Saved -> "Photo saved"
-                    is GlassesCamera.Result.Failed -> result.reason
-                }
-                if (fromWatch) setStatus("Watch photo: $message")
-                report(message)
+    private fun takePhoto(report: (String) -> Unit) {
+        val installed = try {
+            packageManager.getPackageInfo(CAMERA_APP, 0)
+            true
+        } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
+            false
+        }
+        if (!installed) return report("Install the Glasses Camera app to take photos with the glasses")
+        setStatus("Taking a photo…")
+        var answered = false
+        val giveUp = Runnable {
+            if (!answered) {
+                answered = true
+                report("The glasses camera didn't answer")
             }
         }
+        main.postDelayed(giveUp, 65_000)
+        sendOrderedBroadcast(
+            // Include it even if it hasn't been opened since being installed.
+            Intent(CAMERA_ACTION).setPackage(CAMERA_APP).addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES),
+            // No receiver permission: the guard is on Glasses Camera's side, where its receiver only
+            // accepts senders holding TAKE_PHOTO (granted to apps signed with our key).
+            null,
+            object : android.content.BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    if (answered) return
+                    answered = true
+                    main.removeCallbacks(giveUp)
+                    // No result data means Glasses Camera never ran the request.
+                    guard("photo result") { report(resultData ?: "Open the Glasses Camera app once to set it up") }
+                }
+            },
+            main,
+            0,
+            null,
+            null,
+        )
     }
 
     // ---- questions ------------------------------------------------------------
@@ -1029,6 +1049,8 @@ class GlassesService : Service() {
     companion object {
         private const val TAG = "GlassesService"
         const val CHANNEL = "connector"
+        private const val CAMERA_APP = "com.knightdx.glassescamera"
+        private const val CAMERA_ACTION = "com.knightdx.glassescamera.TAKE_PHOTO"
         private val TEXTING_APPS = setOf("com.google.android.apps.messaging", "com.samsung.android.messaging")
         private const val NOTIFICATION_ID = 1
         private const val LOCAL_KEY = "local"

@@ -5,12 +5,12 @@ plugins {
 
 // The Galaxy Watch companion: one job, ask the phone to take a photo with the glasses.
 android {
-    namespace = "com.knightdx.glassestunes.watch"
+    namespace = "com.knightdx.glassescamera.watch"
     compileSdk = 35
 
     defaultConfig {
         // Must match the phone app: the Wear data layer only connects apps with the same id and signing key.
-        applicationId = "com.knightdx.glassestunes"
+        applicationId = "com.knightdx.glassescamera"
         minSdk = 30
         targetSdk = 34
         versionCode = 1

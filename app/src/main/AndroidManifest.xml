@@ -2,6 +2,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!--
+      "Jarvis, take a photo" asks the separate Glasses Camera app. Signature level, so only apps signed
+      with this same key can use it. Declared here too so the order you install the two apps doesn't matter.
+    -->
+    <permission
+        android:name="com.knightdx.glassescamera.permission.TAKE_PHOTO"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.knightdx.glassescamera.permission.TAKE_PHOTO" />
     <!-- Questions go to Gemini (only when you ask one). -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
@@ -50,6 +58,7 @@
             <action android:name="android.intent.action.VOICE_COMMAND" />
         </intent>
         <package android:name="com.whatsapp" />
+        <package android:name="com.knightdx.glassescamera" />
     </queries>
 
     <application
@@ -59,14 +68,6 @@
         android:label="@string/app_name"
         android:theme="@style/AppTheme">
 
-        <!-- Glasses camera: Meta Wearables Device Access Toolkit (0/0 = Developer Mode, no attestation). -->
-        <meta-data
-            android:name="com.meta.wearable.mwdat.APPLICATION_ID"
-            android:value="${mwdat_application_id}" />
-        <meta-data
-            android:name="com.meta.wearable.mwdat.CLIENT_TOKEN"
-            android:value="${mwdat_client_token}" />
-
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -74,13 +75,6 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-            <!-- The Meta AI app returns here after you connect the glasses camera. -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="glassestunes" />
             </intent-filter>
         </activity>
 
@@ -113,19 +107,6 @@
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
-            </intent-filter>
-        </service>
-
-        <!-- "Take a photo" from the Glasses Tunes watch app. -->
-        <service
-            android:name=".WatchListener"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
-                <data
-                    android:host="*"
-                    android:pathPrefix="/glasses-tunes"
-                    android:scheme="wear" />
             </intent-filter>
         </service>
 

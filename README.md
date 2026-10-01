@@ -54,7 +54,7 @@ Things you can say:
 | "read my messages" / "what did Sarah say" | reads new messages from any app aloud |
 | "reply sounds good" / "reply to John on my way" | replies in the app the message came from |
 | "tap Send" / "scroll down" / "type hello" / "go home" / "press back" | controls whatever is on screen |
-| "take a photo" / "take a picture" | photo with the glasses' camera, saved to Gallery |
+| "take a photo" / "take a picture" | photo with the glasses' camera, via the separate Glasses Camera app |
 | "who won the Lakers game?" / "google how tall is Everest" / anything else | asks Gemini (with Google Search) and speaks the answer |
 
 ## Finding your songs
@@ -175,61 +175,67 @@ Jarvis") through the glasses' microphone.
   tap-tap while music is on.
 - Turn Jarvis off completely with **Always listen for "Jarvis"** in the app.
 
-## Taking photos with the glasses (voice or Galaxy Watch)
+## Taking photos: the separate Glasses Camera app
 
-Say **"Jarvis, take a photo"**, or double-press the Home button on your
-Galaxy Watch. The glasses take the photo and it's saved on your phone in
-**Gallery → Pictures → Glasses Tunes**. This uses Meta's Wearables Device
-Access Toolkit, which your Developer Mode unlocks.
+Photos with the glasses live in their own app, **Glasses Camera**, with a
+companion app for the **Galaxy Watch**. Double-press the watch's Home button
+and the glasses take a photo, saved on your phone in **Gallery → Pictures →
+Glasses Camera**. It uses Meta's Wearables Device Access Toolkit, which your
+Developer Mode unlocks. Glasses Tunes doesn't include the toolkit. Its
+"Jarvis, take a photo" command simply asks Glasses Camera, if it's installed.
 
-**Phone setup (once):**
+| File | Install on |
+|---|---|
+| `release/GlassesCamera.apk` | phone |
+| `release/GlassesCamera-Watch.apk` | Galaxy Watch |
 
-1. Update Glasses Tunes and tap **1 · Grant permissions & start connector**.
-   This grants *Nearby devices*, which the glasses camera needs.
-2. Tap **Connect glasses camera**. The Meta AI app opens; approve Glasses
-   Tunes, then come back.
-3. Tap **Allow glasses camera** and approve in the Meta AI app.
+**Phone setup (once):** open **Glasses Camera** and:
+
+1. **Allow Nearby devices.**
+2. **Connect to the glasses.** The Meta AI app opens; approve Glasses
+   Camera and come back.
+3. **Allow the glasses camera** in Meta AI.
 4. Tap **📸 Take a test photo**.
 
-**Watch setup (once):** the watch app is a separate file,
-`release/GlassesTunes-Watch.apk`. Watch apps from outside the Play Store
-have to be installed over Wi-Fi debugging:
+**Watch setup (once):** watch apps from outside the Play Store are
+installed over Wi-Fi debugging:
 
 1. On the watch: Settings → About watch → Software information → tap
-   **Software version** 5 times to unlock Developer options. Then in
-   Settings → Developer options, turn on **ADB debugging** and **Wireless
-   debugging**. Keep the watch and phone on the same Wi-Fi.
+   **Software version** 5 times to unlock Developer options. Then turn on
+   **ADB debugging** and **Wireless debugging** in Developer options, with the
+   watch and phone on the same Wi-Fi.
 2. On the phone, install a watch-installer app from the Play Store (for
-   example *Wear Installer 2* or *Bugjaeger*), pair it with the code shown
-   under the watch's Wireless debugging → *Pair new device*, and install
-   `GlassesTunes-Watch.apk`. (From a computer instead: `adb pair`, `adb
-   connect`, `adb install GlassesTunes-Watch.apk`.)
+   example *Wear Installer 2* or *Bugjaeger*), pair it using the code under
+   the watch's Wireless debugging → *Pair new device*, and install
+   `GlassesCamera-Watch.apk`. (From a computer: `adb pair`, `adb connect`,
+   `adb install GlassesCamera-Watch.apk`.)
 3. On the watch: Settings → Advanced features → **Customize keys** → Home
-   key → **Double press** → **Glasses Camera**. (Or on the phone: Galaxy
-   Wearable → Watch settings → Buttons and gestures.)
+   key → **Double press** → **Glasses Camera**.
 
 Now double-press Home: the watch shows 📸, then ✅ and a short buzz when the
-photo is saved (or ⚠️ and the reason, with a double buzz). Double-press
-again while it's showing to take another.
+photo is saved (or ⚠️ and the reason, with a double buzz). Double-press again
+while it's showing to take another. Glasses Camera doesn't need to be open:
+the watch's request wakes it up.
 
 Good to know:
 
-- **Photo quality:** the photo is taken from the toolkit's live camera stream
-  (up to 720×1280), which is the path Meta's own sample uses. It may be
-  lower resolution than photos taken with the glasses' own capture button or
-  "Hey Meta, take a photo". Those still work as normal and save to the Meta
-  AI app.
+- **Photo quality:** photos come from the toolkit's live camera stream (up to
+  720×1280), the path Meta's own sample uses. They may be lower resolution
+  than the glasses' own capture button or "Hey Meta, take a photo", which still
+  work as normal and save to the Meta AI app.
 - **Speed:** the first photo takes a few seconds while the camera stream
-  starts. The camera stays ready for 20 seconds, so follow-up shots are
-  quicker.
+  starts. It stays ready for 20 seconds, so follow-ups are quicker.
 - **Privacy:** the glasses' capture light comes on while their camera is in
-  use, as with any photo.
-- **Requirements:** Developer Mode must stay on in the Meta AI app, and the
-  Glasses Tunes connector must be running on the phone.
-- **Signing:** both apps are signed with the same key
-  (`signing/glassestunes.keystore`). The watch can only talk to a phone app
-  signed with the same key, and keeping one key means updates install over
-  the existing app.
+  use. Only apps signed with the same key as Glasses Camera (that is, Glasses
+  Tunes) can ask it for a photo. Requests from any other app are refused by
+  Android.
+- **Requirements:** Developer Mode must stay on in the Meta AI app.
+- **If you installed the earlier combined version:** uninstall the old
+  "Glasses Camera" watch app first. It belonged to Glasses Tunes, while the
+  new one pairs with the Glasses Camera phone app.
+- **Signing:** all three apps share one key (`signing/glassestunes.keystore`),
+  the same key as every earlier Glasses Tunes build, so updates install in
+  place.
 
 ## Auto-start and the lock screen
 
@@ -337,10 +343,9 @@ report.
 | `ScreenControlService.kt` | accessibility service: tap, scroll, type, back/home, WhatsApp Send |
 | `JarvisWakeWord.kt` | always-on "Jarvis" listener (Vosk, offline) |
 | `JarvisDetector.kt` | wake-word grammar and acceptance rule (unit tested) |
-| `GlassesCamera.kt` | glasses photos via Meta's toolkit: session → camera stream → capture → Gallery |
-| `WatchListener.kt` | receives "take a photo" from the watch app and replies with the result |
-| `wear/` | the Galaxy Watch app ("Glasses Camera"): opening it asks the phone for a photo |
-| `app/src/androidTest/` | on-device test of the camera flow against Meta's simulated glasses (`mock` build) |
+| `camera/` | **Glasses Camera** phone app: `GlassesCamera.kt` (session → camera stream → capture → Gallery), `WatchListener.kt` (watch requests), `PhotoRequestReceiver.kt` (requests from Glasses Tunes) |
+| `camera/src/androidTest/` | on-device test of the camera flow against Meta's simulated glasses (`mock` build) |
+| `wear/` | **Glasses Camera** watch app: opening it asks the phone for a photo |
 | `SoundMatcher.kt` | matches foreign titles by sound when they're heard as English words (unit tested) |
 | `AskAssistant.kt` | questions → Gemini with Google Search, answers cleaned up for speaking |
 | `tools/jarvis_eval.py` | measures detection and false triggers on synthetic speech |
