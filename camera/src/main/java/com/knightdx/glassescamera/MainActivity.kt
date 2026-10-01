@@ -20,6 +20,7 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var checklist: TextView
     private lateinit var status: TextView
+    private lateinit var log: TextView
     private val camera get() = GlassesCamera.get(this)
 
     /** Camera permission is granted in the Meta AI app, which this opens. */
@@ -36,6 +37,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         updateChecklist()
+        showLog()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
@@ -54,6 +56,11 @@ class MainActivity : ComponentActivity() {
             "${MediaStore.Images.Media.DATE_ADDED} DESC",
         )?.use { c -> if (c.moveToFirst()) return android.content.ContentUris.withAppendedId(collection, c.getLong(0)) }
         return null
+    }
+
+    private fun showLog() {
+        val entries = PhotoLog.entries(this)
+        log.text = if (entries.isEmpty()) "No photos attempted yet." else entries.joinToString("\n")
     }
 
     private fun hasNearbyDevices() = GlassesCamera.hasNearbyDevicesPermission(this)
@@ -117,7 +124,8 @@ class MainActivity : ComponentActivity() {
         })
         column.addView(button("📸 Take a test photo") {
             status.text = "Taking a photo…"
-            camera.takePhoto { result ->
+            camera.takePhoto("app") { result ->
+                showLog()
                 when (result) {
                     is GlassesCamera.Result.Saved -> {
                         status.text = "Photo saved. Tap \"Show latest photo\"."
@@ -133,6 +141,15 @@ class MainActivity : ComponentActivity() {
         })
         status = text("", 18f)
         column.addView(status)
+
+        column.addView(text("Recent attempts", 18f))
+        log = text("", 13f).apply { setTextIsSelectable(true) }
+        column.addView(log)
+        column.addView(button("↻ Refresh") { showLog() })
+        column.addView(button("Reset glasses connection") {
+            status.text = "Resetting…"
+            camera.reset { status.text = "Reset. The next photo connects from scratch." }
+        })
 
         column.addView(text("On your Galaxy Watch", 18f))
         column.addView(

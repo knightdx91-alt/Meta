@@ -80,6 +80,61 @@ class GlassesCameraMockTest {
         Handler(Looper.getMainLooper()).post { camera.shutdown() }
     }
 
+    /**
+     * The "worked for a few minutes, then stopped" case: the glasses go away mid-session.
+     * The next photo must fail within the time limit (not hang and block every later photo),
+     * and photos must work again once the glasses are back, without restarting the app.
+     */
+    @Test
+    fun recoversAfterTheGlassesComeOff() {
+        val glasses = setUpGlasses()
+        val camera = GlassesCamera.get(context)
+        assertEquals(GlassesCamera.Readiness.READY, waitForReady(camera))
+
+        assertTrue("first photo should work: ${photo(camera)}", photo(camera) is GlassesCamera.Result.Saved)
+
+        glasses.doff()
+        glasses.fold()
+        val started = System.currentTimeMillis()
+        val whileOff = photo(camera, timeoutSeconds = 70)
+        val took = (System.currentTimeMillis() - started) / 1000
+        println("GlassesCameraMockTest: with glasses off -> $whileOff after ${took}s")
+        assertTrue("should fail, not succeed, with the glasses off: $whileOff", whileOff is GlassesCamera.Result.Failed)
+
+        glasses.unfold()
+        glasses.don()
+        Thread.sleep(2000)
+        val again = photo(camera)
+        println("GlassesCameraMockTest: glasses back on -> $again")
+        assertTrue("photos should work again: $again", again is GlassesCamera.Result.Saved)
+    }
+
+    private fun setUpGlasses(): com.meta.wearable.dat.mockdevice.api.MockGlasses {
+        val picture = File(context.cacheDir, "mock_capture.jpg")
+        Bitmap.createBitmap(640, 480, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.rgb(0, 128, 255)) }
+            .compress(Bitmap.CompressFormat.JPEG, 90, picture.outputStream())
+        val feed = File(context.cacheDir, "mock_feed.mp4")
+        InstrumentationRegistry.getInstrumentation().context.assets.open("mock_feed.mp4").use { input ->
+            feed.outputStream().use { input.copyTo(it) }
+        }
+        val glasses = kit.pairGlasses(GlassesModel.RAYBAN_META).getOrThrow()
+        glasses.powerOn()
+        glasses.unfold()
+        glasses.don()
+        glasses.services.camera.setCameraFeed(Uri.fromFile(feed))
+        glasses.services.camera.setCapturedImage(Uri.fromFile(picture))
+        return glasses
+    }
+
+    /** Takes one photo and waits for the result (null if none arrived in time). */
+    private fun photo(camera: GlassesCamera, timeoutSeconds: Long = 60): GlassesCamera.Result? {
+        val done = CountDownLatch(1)
+        var result: GlassesCamera.Result? = null
+        Handler(Looper.getMainLooper()).post { camera.takePhoto("test") { result = it; done.countDown() } }
+        done.await(timeoutSeconds, TimeUnit.SECONDS)
+        return result
+    }
+
     private fun waitForReady(camera: GlassesCamera): GlassesCamera.Readiness {
         var state = camera.readiness()
         repeat(40) {

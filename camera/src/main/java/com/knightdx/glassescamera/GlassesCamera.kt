@@ -81,22 +81,47 @@ class GlassesCamera private constructor(private val context: Context) {
         }
     }
 
-    /** Takes a photo; [done] runs on the main thread. */
-    fun takePhoto(done: (Result) -> Unit) {
+    /** Takes a photo; [done] runs on the main thread. Every attempt is recorded in [PhotoLog]. */
+    fun takePhoto(source: String = "app", done: (Result) -> Unit) {
         scope.launch {
             val result = try {
-                if (busy.isLocked) Result.Failed("Still taking the last photo") else busy.withLock { capture() }
+                if (busy.isLocked) {
+                    Result.Failed("Still taking the last photo")
+                } else {
+                    busy.withLock {
+                        // Never let one stuck attempt block every photo after it.
+                        withTimeout(TOTAL_TIMEOUT_MS) { capture() }.also {
+                            // A failed attempt may leave the stream half-broken; start fresh next time.
+                            if (it is Result.Failed) closeCamera()
+                        }
+                    }
+                }
             } catch (e: TimeoutCancellationException) {
                 closeCamera()
-                Result.Failed("The glasses didn't respond. Make sure they're on and connected.")
+                Result.Failed("The glasses didn't respond${lastError?.let { " ($it)" } ?: ""}. Make sure they're on, unfolded and connected.")
             } catch (e: Exception) {
                 Log.w(TAG, "photo failed", e)
                 closeCamera()
-                Result.Failed("The photo didn't work")
+                Result.Failed("The photo didn't work: ${e.message ?: e.javaClass.simpleName}")
             }
+            PhotoLog.add(context, source, result)
             done(result)
         }
     }
+
+    /** Drops any open connection to the glasses camera; the next photo connects from scratch. */
+    fun reset(done: () -> Unit) {
+        scope.launch {
+            idleClose?.cancel()
+            closeCamera()
+            done()
+        }
+    }
+
+    /** The most recent error the toolkit reported (session or stream), for clearer failure messages. */
+    @Volatile
+    private var lastError: String? = null
+    private var errorWatch: Job? = null
 
     private suspend fun capture(): Result {
         when (readiness()) {
@@ -108,11 +133,16 @@ class GlassesCamera private constructor(private val context: Context) {
         }
         val permission = Wearables.checkPermissionStatus(Permission.CAMERA).getOrNull()
         if (permission != PermissionStatus.Granted) {
-            return Result.Failed("Open Glasses Camera on your phone and allow the camera first")
+            // Happens when "Allow once" was chosen in Meta AI: it expires after a while.
+            return Result.Failed("Camera permission ran out. Open Glasses Camera, tap step 3 and choose Always allow")
         }
         idleClose?.cancel()
-        val cam = openCamera() ?: return Result.Failed("I couldn't reach the glasses camera")
-        val photo = cam.stream.capturePhoto()
+        lastError = null
+        val cam = openCamera()
+            ?: return Result.Failed(
+                "Couldn't reach the glasses${lastError?.let { " ($it)" } ?: ""}. Make sure you're wearing them, they're unfolded and connected to Meta AI"
+            )
+        val photo = withTimeout(CAPTURE_TIMEOUT_MS) { cam.stream.capturePhoto() }
         val data = photo.getOrNull()
             ?: return Result.Failed("The glasses couldn't take the photo: ${photo.errorOrNull()?.description ?: "unknown error"}")
         val uri = withContext(Dispatchers.IO) { save(data) } ?: return Result.Failed("I couldn't save the photo")
@@ -126,24 +156,57 @@ class GlassesCamera private constructor(private val context: Context) {
 
     /** A streaming camera, reusing the open one when possible. */
     private suspend fun openCamera(): Camera? {
-        camera?.let { if (it.stream.state.value == StreamState.STREAMING) return it }
+        camera?.let { if (isStreaming(it)) return it }
         closeCamera()
-        val newSession = Wearables.createSession(AutoDeviceSelector()).getOrNull() ?: return null
+        val created = Wearables.createSession(AutoDeviceSelector())
+        val newSession = created.getOrNull() ?: run {
+            lastError = created.errorOrNull()?.description
+            return null
+        }
         session = newSession
+        errorWatch?.cancel()
+        errorWatch = scope.launch {
+            launch { newSession.errors.collect { lastError = it.description; Log.w(TAG, "session: ${it.description}") } }
+            // The glasses can end the session themselves (taken off, folded, out of range): forget it then,
+            // so the next photo starts a new one instead of using a dead connection.
+            newSession.state.collect { state ->
+                if (state == DeviceSessionState.STOPPED && session === newSession) {
+                    camera = null
+                    session = null
+                }
+            }
+        }
         newSession.start()
         withTimeout(20_000) { newSession.state.first { it == DeviceSessionState.STARTED || it == DeviceSessionState.STOPPED } }
         if (newSession.state.value != DeviceSessionState.STARTED) return null
-        val cam = newSession.addCamera(StreamConfiguration(videoQuality = VideoQuality.HIGH, frameRate = 15)).getOrNull()
-            ?: return null
+        val added = newSession.addCamera(StreamConfiguration(videoQuality = VideoQuality.HIGH, frameRate = 15))
+        val cam = added.getOrNull() ?: run {
+            lastError = added.errorOrNull()?.description
+            return null
+        }
         camera = cam
-        if (cam.stream.start().isFailure) return null
+        scope.launch { cam.stream.errorStream.collect { lastError = it.description; Log.w(TAG, "stream: ${it.description}") } }
+        val started = cam.stream.start()
+        if (started.isFailure) {
+            lastError = started.errorOrNull()?.description
+            return null
+        }
         withTimeout(20_000) {
             cam.stream.state.first { it == StreamState.STREAMING || it == StreamState.STOPPED || it == StreamState.CLOSED }
         }
-        return cam.takeIf { it.stream.state.value == StreamState.STREAMING }
+        return cam.takeIf { isStreaming(it) }
+    }
+
+    /** False for a camera whose stream has ended (the toolkit throws if a stopped camera is touched). */
+    private fun isStreaming(cam: Camera): Boolean = try {
+        cam.stream.state.value == StreamState.STREAMING
+    } catch (e: IllegalStateException) {
+        false
     }
 
     private fun closeCamera() {
+        errorWatch?.cancel()
+        errorWatch = null
         try {
             camera?.stop()
             session?.stop()
@@ -212,6 +275,9 @@ class GlassesCamera private constructor(private val context: Context) {
             shared ?: GlassesCamera(context.applicationContext).also { shared = it }
         }
         private const val KEEP_OPEN_MS = 20_000L
+        private const val CAPTURE_TIMEOUT_MS = 20_000L
+        /** Connecting (20 s) + streaming (20 s) + capture (20 s), with room to spare; under the watch's 50 s wait. */
+        private const val TOTAL_TIMEOUT_MS = 45_000L
 
         @Volatile
         private var initialized = false

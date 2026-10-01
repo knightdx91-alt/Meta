@@ -24,7 +24,7 @@ class WatchListener : WearableListenerService() {
 
     override fun onMessageReceived(event: MessageEvent) {
         if (event.path != WatchProtocol.TAKE_PHOTO) return
-        val message = takePhotoAndWait(this)
+        val message = takePhotoAndWait(this, "watch")
         Wearable.getMessageClient(applicationContext)
             .sendMessage(event.sourceNodeId, WatchProtocol.RESULT, message.toByteArray())
             .addOnFailureListener { Log.w("WatchListener", "couldn't reply to the watch", it) }
@@ -32,11 +32,11 @@ class WatchListener : WearableListenerService() {
 
     companion object {
         /** Takes a photo and returns a short message ("Photo saved" or why not). Call off the main thread. */
-        fun takePhotoAndWait(context: android.content.Context): String {
+        fun takePhotoAndWait(context: android.content.Context, source: String): String {
             val done = CountDownLatch(1)
             var message = "The glasses didn't respond"
             android.os.Handler(android.os.Looper.getMainLooper()).post {
-                GlassesCamera.get(context).takePhoto { result ->
+                GlassesCamera.get(context).takePhoto(source) { result ->
                     message = when (result) {
                         is GlassesCamera.Result.Saved -> "Photo saved"
                         is GlassesCamera.Result.Failed -> result.reason

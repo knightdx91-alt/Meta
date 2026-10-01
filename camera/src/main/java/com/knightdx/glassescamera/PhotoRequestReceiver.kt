@@ -16,7 +16,7 @@ class PhotoRequestReceiver : BroadcastReceiver() {
         if (intent.action != ACTION_TAKE_PHOTO) return
         val pending = goAsync()
         thread(name = "photo-request") {
-            val message = WatchListener.takePhotoAndWait(context.applicationContext)
+            val message = WatchListener.takePhotoAndWait(context.applicationContext, "Glasses Tunes")
             pending.resultCode = if (message == "Photo saved") 1 else 0
             pending.resultData = message
             pending.finish()
