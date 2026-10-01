@@ -138,3 +138,13 @@ class AskTest {
         assertEquals("First sentence here is long enough to count as a real sentence for trimming.", SpokenText.clean(long))
     }
 }
+
+class PhotoCommandTest {
+    @Test fun photoPhrases() {
+        for (p in listOf("take a photo", "Take a picture.", "snap a photo", "photo", "capture this", "hey take a pic")) {
+            assertEquals(p, Command.TakePhoto, CommandParser.parse(p))
+        }
+        // Music and questions are unaffected.
+        assertEquals(Command.Play(PlayRequest("photograph")), CommandParser.parse("play Photograph"))
+    }
+}

@@ -57,6 +57,9 @@ sealed class Command {
     /** A question for Gemini ("google who won the game", or anything that isn't a command). */
     data class Ask(val question: String) : Command()
 
+    /** Take a photo with the glasses' camera. */
+    object TakePhoto : Command()
+
     data class Unknown(val heard: String) : Command()
 }
 
@@ -94,6 +97,11 @@ object CommandParser {
         "open google assistant", "open the assistant",
     )
 
+    private val photoWords = setOf(
+        "take a photo", "take a picture", "take photo", "take picture", "take a pic", "take a snap", "snap a photo",
+        "snap a picture", "photo", "picture", "capture", "capture a photo", "capture this", "take a photo of this",
+        "take a picture of this", "get a photo", "get a picture", "shoot a photo", "cheese",
+    )
     private val answerWords = setOf("answer", "answer it", "answer the call", "answer the phone", "answer call", "pick up", "pick it up", "accept", "accept the call", "accept call")
     private val declineWords = setOf("decline", "decline it", "decline the call", "decline call", "reject", "reject the call", "reject call", "ignore", "ignore it", "ignore the call", "ignore call", "send to voicemail")
     private val homeWords = setOf("go home", "home screen", "go to the home screen", "go to home screen", "show home screen", "press home", "home button")
@@ -153,6 +161,7 @@ object CommandParser {
             in whatWords -> return Command.WhatsPlaying
             in shuffleAllWords -> return Command.ShuffleAll
             in assistantWords -> return Command.Assistant
+            in photoWords -> return Command.TakePhoto
             in answerWords -> return Command.AnswerCall
             in declineWords -> return Command.DeclineCall
             in homeWords -> return Command.UiHome

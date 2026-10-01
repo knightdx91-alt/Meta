@@ -42,6 +42,8 @@ class GlassesService : Service() {
     private lateinit var launcher: AppLauncher
     private lateinit var phone: PhoneActions
     private lateinit var assistant: AskAssistant
+    lateinit var camera: GlassesCamera
+        private set
     /** Recent questions and answers, so follow-ups like "who's he married to?" work. */
     private val conversation = ArrayList<AskAssistant.Turn>()
     private var lastQuestionAt = 0L
@@ -86,6 +88,7 @@ class GlassesService : Service() {
         launcher = AppLauncher(this)
         phone = PhoneActions(this)
         assistant = AskAssistant(this)
+        camera = GlassesCamera(this)
         jarvis = JarvisWakeWord(this, onWake = ::onJarvis, onError = ::onJarvisError)
         getSystemService(AudioManager::class.java).registerAudioDeviceCallback(deviceCallback, main)
         if (Build.VERSION.SDK_INT >= 31) {
@@ -146,6 +149,7 @@ class GlassesService : Service() {
         local.release()
         speaker.shutdown()
         assistant.shutdown()
+        camera.shutdown()
         io.shutdownNow()
         super.onDestroy()
     }
@@ -462,6 +466,9 @@ class GlassesService : Service() {
             Command.UiBack, Command.UiHome, Command.UiNotifications, Command.UiRecents,
             is Command.UiScroll, is Command.UiTap, is Command.UiType -> controlScreen(command, resumeIfNeeded)
             is Command.Ask -> askQuestion(command.question, resumeIfNeeded)
+            Command.TakePhoto -> takePhoto(fromWatch = false) { message ->
+                end(message, resumeIfNeeded)
+            }
             // Anything that isn't a command is treated as a question, once Gemini is set up.
             is Command.Unknown -> if (Prefs.geminiKey(this).isNotBlank()) {
                 askQuestion(command.heard, resumeIfNeeded)
@@ -470,6 +477,26 @@ class GlassesService : Service() {
                     resumeIfNeeded()
                     finished("Didn't understand \"${command.heard}\"")
                 }
+            }
+        }
+    }
+
+    // ---- glasses camera ---------------------------------------------------------
+
+    /**
+     * Takes a photo with the glasses and reports a short message ("Photo saved",
+     * or why not). From the watch it stays quiet: the watch shows the result.
+     */
+    fun takePhoto(fromWatch: Boolean, report: (String) -> Unit) = guard("taking a photo") {
+        if (!fromWatch) setStatus("Taking a photo…")
+        camera.takePhoto { result ->
+            guard("saving a photo") {
+                val message = when (result) {
+                    is GlassesCamera.Result.Saved -> "Photo saved"
+                    is GlassesCamera.Result.Failed -> result.reason
+                }
+                if (fromWatch) setStatus("Watch photo: $message")
+                report(message)
             }
         }
     }

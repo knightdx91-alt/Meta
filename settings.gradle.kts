@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "GlassesTunes"
 include(":app")
+include(":wear")

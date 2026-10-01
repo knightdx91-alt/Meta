@@ -1,7 +1,6 @@
 package com.knightdx.glassestunes
 
 import android.Manifest
-import android.app.Activity
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -18,8 +17,22 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
+import androidx.activity.ComponentActivity
+import com.meta.wearable.dat.core.Wearables
+import com.meta.wearable.dat.core.types.Permission
+import com.meta.wearable.dat.core.types.PermissionStatus
 
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
+
+    /** Camera permission is granted in the Meta AI app, which this opens. */
+    private val glassesCameraPermission = registerForActivityResult(Wearables.RequestPermissionContract()) { result ->
+        statusView.text = if (result.getOrNull() == PermissionStatus.Granted) {
+            "Glasses camera allowed. Try \"Jarvis, take a photo\"."
+        } else {
+            "Glasses camera wasn't allowed"
+        }
+        updateChecklist()
+    }
 
     private lateinit var checklist: TextView
     private lateinit var statusView: TextView
@@ -52,7 +65,7 @@ class MainActivity : Activity() {
         super.onPause()
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         updateChecklist()
         if (missingPermissions().isEmpty()) startConnector()
@@ -134,6 +147,15 @@ class MainActivity : Activity() {
             line(
                 Prefs.geminiKey(this).isNotBlank(),
                 if (Prefs.geminiKey(this).isNotBlank()) "Questions: Gemini key added" else "Questions: add a Gemini key below",
+            ),
+            line(
+                cameraReadiness() == GlassesCamera.Readiness.READY,
+                when (cameraReadiness()) {
+                    GlassesCamera.Readiness.READY -> "Glasses camera connected"
+                    GlassesCamera.Readiness.CONNECTING -> "Glasses camera: finish connecting in the Meta AI app"
+                    GlassesCamera.Readiness.NOT_CONNECTED -> "Glasses camera: tap Connect glasses camera below"
+                    GlassesCamera.Readiness.NEEDS_BLUETOOTH_PERMISSION -> "Glasses camera: needs the Nearby devices permission (step 1)"
+                },
             ),
             line(service != null, if (service != null) "Connector running · ${service.librarySize} songs on phone" else "Connector stopped"),
             line(
@@ -239,6 +261,36 @@ class MainActivity : Activity() {
             toggle("Pause Jarvis while music plays (keeps music in full quality)", Prefs.JARVIS_IDLE_ONLY)
         )
 
+        column.addView(text("Glasses camera", 18f))
+        column.addView(
+            text(
+                "Take photos with the glasses by saying \"Jarvis, take a photo\" or from your Galaxy Watch. " +
+                    "Uses Meta's developer toolkit, so Developer Mode must stay on in the Meta AI app. " +
+                    "Photos are saved to Gallery → Pictures → Glasses Tunes."
+            )
+        )
+        column.addView(button("Connect glasses camera (opens Meta AI)") {
+            if (GlassesCamera(this).ensureInitialized()) {
+                Wearables.startRegistration(this)
+            } else {
+                statusView.text = "Allow Nearby devices first (step 1)"
+                startConnector()
+            }
+        })
+        column.addView(button("Allow glasses camera (opens Meta AI)") {
+            if (GlassesCamera(this).ensureInitialized()) glassesCameraPermission.launch(Permission.CAMERA)
+            else statusView.text = "Allow Nearby devices first (step 1)"
+        })
+        column.addView(button("📸 Take a test photo") {
+            val s = GlassesService.instance
+            if (s == null) {
+                statusView.text = "Start the connector first"
+            } else {
+                statusView.text = "Taking a photo…"
+                s.takePhoto(fromWatch = false) { message -> runOnUiThread { statusView.text = message } }
+            }
+        })
+
         column.addView(text("Ask questions", 18f))
         column.addView(
             text(
@@ -304,6 +356,8 @@ class MainActivity : Activity() {
 
         return ScrollView(this).apply { addView(column) }
     }
+
+    private fun cameraReadiness() = GlassesCamera(this).readiness()
 
     private fun crashPanel(report: String, pad: Int): View {
         val panel = LinearLayout(this).apply {
