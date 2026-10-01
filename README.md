@@ -204,10 +204,15 @@ installed over Wi-Fi debugging:
    **Software version** 5 times to unlock Developer options. Then turn on
    **ADB debugging** and **Wireless debugging** in Developer options, with the
    watch and phone on the same Wi-Fi.
-2. On the phone, install a watch-installer app from the Play Store (for
-   example *Wear Installer 2* or *Bugjaeger*), pair it using the code under
-   the watch's Wireless debugging → *Pair new device*, and install
-   `GlassesCamera-Watch.apk`. (From a computer: `adb pair`, `adb connect`,
+2. On the phone, install **Bugjaeger** from the Play Store (it paired
+   reliably with a Galaxy Watch Ultra 2 where *Wear Installer 2* kept saying
+   "pairing failed"). Pair it using the IP, the **pairing port** and the
+   6-digit code from the watch's Wireless debugging → *Pair new device*
+   popup, then install `GlassesCamera-Watch.apk` from its Packages section.
+   If pairing fails: set the watch's screen timeout to the maximum (the
+   popup and its code close when the screen sleeps), turn off any VPN on the
+   phone, and put both on the same network (the phone's 2.4 GHz hotspot
+   works well). (From a computer: `adb pair`, `adb connect`,
    `adb install GlassesCamera-Watch.apk`.)
 3. On the watch: Settings → Advanced features → **Customize keys** → Home
    key → **Double press** → **Glasses Camera**.
