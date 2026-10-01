@@ -20,7 +20,6 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var checklist: TextView
     private lateinit var status: TextView
-    private var lastPhoto: Uri? = null
     private val camera get() = GlassesCamera.get(this)
 
     /** Camera permission is granted in the Meta AI app, which this opens. */
@@ -42,6 +41,19 @@ class MainActivity : ComponentActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         updateChecklist()
+    }
+
+    /** The most recent photo in Pictures/Glasses Camera (this app saved them, so it can read them). */
+    private fun newestPhoto(): Uri? {
+        val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        contentResolver.query(
+            collection,
+            arrayOf(MediaStore.Images.Media._ID),
+            "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ?",
+            arrayOf("Pictures/Glasses Camera%"),
+            "${MediaStore.Images.Media.DATE_ADDED} DESC",
+        )?.use { c -> if (c.moveToFirst()) return android.content.ContentUris.withAppendedId(collection, c.getLong(0)) }
+        return null
     }
 
     private fun hasNearbyDevices() = GlassesCamera.hasNearbyDevicesPermission(this)
@@ -108,15 +120,15 @@ class MainActivity : ComponentActivity() {
             camera.takePhoto { result ->
                 when (result) {
                     is GlassesCamera.Result.Saved -> {
-                        lastPhoto = result.uri
-                        status.text = "Photo saved. Tap \"Show last photo\"."
+                        status.text = "Photo saved. Tap \"Show latest photo\"."
                     }
                     is GlassesCamera.Result.Failed -> status.text = result.reason
                 }
             }
         })
-        column.addView(button("Show last photo") {
-            val uri = lastPhoto ?: return@button run { status.text = "No photo yet" }
+        column.addView(button("🖼️ Show latest photo") {
+            // Includes photos taken from the watch or Glasses Tunes, not just this screen.
+            val uri = newestPhoto() ?: return@button run { status.text = "No glasses photos yet" }
             startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "image/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
         })
         status = text("", 18f)
@@ -129,6 +141,9 @@ class MainActivity : ComponentActivity() {
                     "Customize keys → Home key → Double press → Glasses Camera. Each double-press takes a photo; " +
                     "the watch shows ✅ and buzzes when it's saved."
             )
+        )
+        column.addView(
+            text("Your photos are in Gallery → Albums → Glasses Camera (or Google Photos → On this device → Glasses Camera).")
         )
         column.addView(button("Open Gallery") {
             startActivity(Intent(Intent.ACTION_VIEW, MediaStore.Images.Media.EXTERNAL_CONTENT_URI))
